@@ -5,9 +5,8 @@ import {
   advanceExpiredMarkingTurn, getWhatsAppStatus, notifyCurrentMarkingTurn,
   sendMarkingSchedule, sendWhatsAppDocument, sendWhatsAppText
 } from './whatsapp.js';
-import { isMajoradoDate } from '../scheduling/majorado.js';
+import { ensureCompetencySchedule, generateOrdinaryAssignments } from '../scheduling/monthly.js';
 
-const monthNames = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
 const weekdayNames = ['domingo', 'segunda-feira', 'terça-feira', 'quarta-feira', 'quinta-feira', 'sexta-feira', 'sábado'];
 const readSetting = (key) => db.prepare('SELECT value FROM system_settings WHERE key=?').get(key)?.value ?? '';
 const writeSetting = (key, value, userId = null) => db.prepare(`INSERT INTO system_settings (key,value,updated_by,updated_at) VALUES (?,?,?,?)
@@ -44,31 +43,6 @@ export function saveAutomationSettings(input, userId) {
   if (dailyChanged) writeSetting('automation_last_daily_run', '', userId);
   if (monthlyChanged) writeSetting('automation_last_monthly_run', '', userId);
   return getAutomationSettings();
-}
-
-function ensureCompetencySchedule(date) {
-  const year = date.year(); const month = date.month() + 1; const stamp = now();
-  db.prepare(`INSERT OR IGNORE INTO competencies
-    (year,month,name,status,standard_hour_limit,current_hour_limit,created_at,updated_at)
-    VALUES (?,?,?,'CONFIGURING',192,192,?,?)`).run(year, month, `${monthNames[month - 1]} de ${year}`, stamp, stamp);
-  const competency = db.prepare('SELECT * FROM competencies WHERE year=? AND month=?').get(year, month);
-  const insert = db.prepare(`INSERT OR IGNORE INTO service_slots
-    (competency_id,service_date,period,starts_at,ends_at,minimum_required,normal_capacity,current_capacity,
-     service_classification,is_majorado,status,homologation_deadline,created_at,updated_at)
-    VALUES (?,?,?,?,?,2,2,2,'EXTRAORDINARY',?,'OPEN',?,?,?)`);
-  const updateMajorado = db.prepare('UPDATE service_slots SET is_majorado=?,updated_at=? WHERE competency_id=? AND service_date=?');
-  db.transaction(() => {
-    for (let day = 1; day <= date.daysInMonth(); day += 1) {
-      const serviceDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-      const nextDate = dayjs(serviceDate).add(1, 'day').format('YYYY-MM-DD');
-      const deadline = dayjs(`${serviceDate}T07:00:00`).subtract(1, 'day').toISOString();
-      const majorado = Number(isMajoradoDate(serviceDate));
-      insert.run(competency.id, serviceDate, 'DIURNO', `${serviceDate}T07:00:00`, `${serviceDate}T19:00:00`, majorado, deadline, stamp, stamp);
-      insert.run(competency.id, serviceDate, 'NOTURNO', `${serviceDate}T19:00:00`, `${nextDate}T07:00:00`, majorado, deadline, stamp, stamp);
-      updateMajorado.run(majorado, stamp, competency.id, serviceDate);
-    }
-  })();
-  return competency;
 }
 
 function scheduleRows(competencyId, empty = false) {
@@ -205,7 +179,8 @@ export async function sendDailySchedule({ force = false } = {}) {
   const todayKey = dayjs().format('YYYY-MM-DD');
   if (!force && readSetting('automation_last_daily_run') === todayKey) return { sent: false, reason: 'A escala de amanhã já foi enviada hoje.' };
   const tomorrow = dayjs().add(1, 'day');
-  ensureCompetencySchedule(tomorrow);
+  const { competency } = ensureCompetencySchedule(tomorrow);
+  generateOrdinaryAssignments({ competencyId: competency.id, reason: 'Preparação automática da escala diária' });
   await sendWhatsAppText(tomorrowScheduleMessage(tomorrow.format('YYYY-MM-DD')));
   writeSetting('automation_last_daily_run', todayKey);
   return { sent: true };
@@ -217,7 +192,7 @@ export async function sendMonthlyOpening({ force = false } = {}) {
   const monthKey = nextMonth.format('YYYY-MM');
   if (!force && readSetting('automation_last_monthly_run') === monthKey) return { sent: false, reason: 'A abertura do próximo mês já foi enviada.' };
   const firstOpening = readSetting('automation_last_monthly_run') !== monthKey;
-  const competency = ensureCompetencySchedule(nextMonth);
+  const { competency } = ensureCompetencySchedule(nextMonth);
   const administrator = db.prepare(`SELECT id FROM users WHERE role='ADMIN' AND active=1 ORDER BY id LIMIT 1`).get();
   if (administrator && firstOpening) {
     const stamp = now();
@@ -228,11 +203,20 @@ export async function sendMonthlyOpening({ force = false } = {}) {
     writeSetting('bot_active_competency_id', competency.id, administrator.id);
     writeSetting('bot_active_marking_column', 2, administrator.id);
   }
-  const pdf = await buildSchedulePdf({ competency, slots: scheduleRows(competency.id, true) });
-  await sendWhatsAppDocument({ buffer: pdf, fileName: `escala-vazia-${monthKey}.pdf`, caption: `*VAGAS — ${competency.name.toUpperCase()}*\n\nEscala completa do mês.` });
+  const generation = generateOrdinaryAssignments({
+    competencyId: competency.id,
+    userId: administrator?.id ?? null,
+    reason: 'Geração e publicação do próximo mês no WhatsApp'
+  });
+  const pdf = await buildSchedulePdf({ competency, slots: scheduleRows(competency.id) });
+  await sendWhatsAppDocument({
+    buffer: pdf,
+    fileName: `escala-${monthKey}.pdf`,
+    caption: `*ESCALA — ${competency.name.toUpperCase()}*\n\nServiços ordinários em preto; vagas restantes serão preenchidas como extras.`
+  });
   const started = administrator ? await startOpenedMonthQueue({ competency, monthKey, administrator }) : false;
   writeSetting('automation_last_monthly_run', monthKey);
-  return { sent: true, sequenceStarted: started };
+  return { sent: true, sequenceStarted: started, competency, generation };
 }
 
 export async function sendMarkingReminder({ force = false } = {}) {
@@ -261,8 +245,9 @@ async function automationTick() {
     if (settings.monthlyEnabled && monthlyDue) {
       if (settings.lastMonthlyRun !== nextMonthKey) await sendMonthlyOpening();
       else if (settings.lastMonthlyQueueStarted !== nextMonthKey && getWhatsAppStatus().status === 'CONNECTED') {
-        const competency = ensureCompetencySchedule(current.add(1, 'month').startOf('month'));
+        const { competency } = ensureCompetencySchedule(current.add(1, 'month').startOf('month'));
         const administrator = db.prepare(`SELECT id FROM users WHERE role='ADMIN' AND active=1 ORDER BY id LIMIT 1`).get();
+        generateOrdinaryAssignments({ competencyId: competency.id, userId: administrator?.id ?? null, reason: 'Retomada automática do próximo mês' });
         if (administrator) await startOpenedMonthQueue({ competency, monthKey: nextMonthKey, administrator });
       }
     }
@@ -282,4 +267,3 @@ export function startWhatsAppAutomation() {
   automationTimer = setInterval(run, 60_000);
   automationTimer.unref?.();
 }
-

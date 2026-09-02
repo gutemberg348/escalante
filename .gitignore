@@ -12,5 +12,5 @@ data/*.sqlite-wal
 data/whatsapp-auth/
 backend/data/
 # Arquivo vazio criado acidentalmente no diretório do backend.
-backend/{console.error(error)
+backend/[{]console.error(error)
 backups/

@@ -63,7 +63,8 @@ router.get('/', (req, res, next) => {
       CASE WHEN m.hour_limit_exempt=1 THEN NULL ELSE COALESCE(m.monthly_hour_limit,?) END AS effective_hour_limit
       FROM members m LEFT JOIN wings w ON w.id=m.default_wing_id
       LEFT JOIN (SELECT a.member_id,COUNT(a.id)*12 AS marked_hours FROM assignments a
-        JOIN service_slots s ON s.id=a.service_slot_id WHERE s.competency_id=? AND a.status='CONFIRMED' GROUP BY a.member_id) hours ON hours.member_id=m.id
+        JOIN service_slots s ON s.id=a.service_slot_id WHERE s.competency_id=?
+          AND a.status='CONFIRMED' AND a.service_type='EXTRAORDINARY' GROUP BY a.member_id) hours ON hours.member_id=m.id
       ORDER BY m.seniority_position IS NULL,m.seniority_position,m.operational_name`).all(monthlyHourLimit, competencyId);
     res.json({ items });
   } catch (error) { next(error); }

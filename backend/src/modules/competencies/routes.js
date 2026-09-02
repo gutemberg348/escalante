@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { db, audit, now } from '../../database/index.js';
 import { allow } from '../../middlewares/auth.js';
 import { isMajoradoDate } from '../../scheduling/majorado.js';
+import { generateNextMonthSchedule, generateOrdinaryAssignments } from '../../scheduling/monthly.js';
 
 const router = Router();
 const monthNames = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
@@ -28,6 +29,27 @@ function prepareMonth(competency) {
 }
 
 router.get('/', (req, res) => res.json({ items: db.prepare(`${slotsCountSql} ORDER BY c.year DESC,c.month DESC`).all().map((item) => ({ ...item, slots_count: Number(item.slots_count) })) }));
+router.post('/generate-next', allow('ADMIN', 'SCHEDULER'), (req, res, next) => {
+  try {
+    const generation = generateNextMonthSchedule({ userId: req.user.id, reason: 'Geração manual pelo painel' });
+    const item = db.prepare(`${slotsCountSql} HAVING c.id=?`).get(generation.competency.id);
+    res.status(generation.competencyCreated ? 201 : 200).json({
+      item: { ...item, slots_count: Number(item.slots_count) },
+      generation: {
+        competencyCreated: generation.competencyCreated,
+        anchors: generation.anchors,
+        dutyDays: generation.dutyDays,
+        assignmentsCreated: generation.assignmentsCreated,
+        assignmentsReclassified: generation.assignmentsReclassified,
+        ordinaryDutyDays: generation.ordinaryDutyDays,
+        ordinaryShifts: generation.ordinaryShifts,
+        skippedMembers: generation.skippedMembers,
+        unavailableDays: generation.unavailableDays,
+        conflictDays: generation.conflictDays
+      }
+    });
+  } catch (error) { next(error); }
+});
 router.get('/:id', (req, res) => { const item = db.prepare(`${slotsCountSql} HAVING c.id=?`).get(req.params.id); return item ? res.json({ item }) : res.status(404).json({ message: 'Mês não encontrado.' }); });
 router.post('/', allow('ADMIN', 'SCHEDULER'), (req, res, next) => {
   try {
@@ -38,6 +60,7 @@ router.post('/', allow('ADMIN', 'SCHEDULER'), (req, res, next) => {
     const result = db.prepare(`INSERT INTO competencies (year,month,name,standard_hour_limit,current_hour_limit,created_at,updated_at) VALUES (?,?,?,?,?,?,?)`).run(year, month, `${monthNames[month - 1]} de ${year}`, 192, 192, stamp, stamp);
     const competency = db.prepare('SELECT * FROM competencies WHERE id=?').get(result.lastInsertRowid);
     prepareMonth(competency);
+    generateOrdinaryAssignments({ competencyId: competency.id, userId: req.user.id, reason: 'Criação manual da competência' });
     const item = db.prepare(`${slotsCountSql} HAVING c.id=?`).get(competency.id);
     audit({ userId: req.user.id, action: 'PREPARE_MONTH', entityType: 'COMPETENCY', entityId: item.id, after: item, req });
     res.status(201).json({ item: { ...item, slots_count: Number(item.slots_count) } });
@@ -48,6 +71,7 @@ router.post('/:id/prepare', allow('ADMIN', 'SCHEDULER'), (req, res, next) => {
     const competency = db.prepare('SELECT * FROM competencies WHERE id=?').get(req.params.id);
     if (!competency) return res.status(404).json({ message: 'Mês não encontrado.' });
     prepareMonth(competency);
+    generateOrdinaryAssignments({ competencyId: competency.id, userId: req.user.id, reason: 'Complementação manual da competência' });
     const item = db.prepare(`${slotsCountSql} HAVING c.id=?`).get(competency.id);
     res.json({ item: { ...item, slots_count: Number(item.slots_count) } });
   } catch (error) { next(error); }

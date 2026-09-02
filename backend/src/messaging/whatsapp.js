@@ -481,8 +481,17 @@ Outros atalhos:
 */horas @pessoa* - horas e horários confirmados de um militar
 */cronograma* - ordem completa da antiguidade e o horário limite de cada militar
 */escala* - recebe a escala em PDF
+*/gerar-proximo-mes* - gera a escala ordinária 1x4 e publica o PDF
 */cancelar 125* - cancela uma marcação
 */passo a vez* - não marca nesta rodada`;
+}
+
+async function generateNextMonthFromGroup() {
+  const { sendMonthlyOpening } = await import('./automation.js');
+  const result = await sendMonthlyOpening({ force: true });
+  if (!result.sent) return result.reason || 'Não foi possível gerar o próximo mês.';
+  const generation = result.generation;
+  return `*PRÓXIMO MÊS GERADO*\n\n*${result.competency.name}*\n${generation.ordinaryDutyDays} serviços ordinários programados no ciclo 1x4.\n${generation.assignmentsCreated} turnos ordinários novos.\n${generation.skippedMembers.length} integrantes ignorados por situação ou autorização.\n${generation.unavailableDays.length} serviços não preenchidos por indisponibilidade.\n${generation.conflictDays.length} conflitos para revisão no painel.\n\nO PDF foi publicado no grupo. As marcações restantes serão extras.`;
 }
 
 async function executeCommand(member, rawBody, { explicitSlash = false, targetMember = null } = {}) {
@@ -490,6 +499,9 @@ async function executeCommand(member, rawBody, { explicitSlash = false, targetMe
   const normalized = commandBody.toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
   const [command, argument] = normalized.split(/\s+/, 2);
   if (['MENU', 'AJUDA', 'COMANDOS'].includes(command)) return commandMenu();
+  if (command === 'GERAR-PROXIMO-MES' || /^(?:GERAR|CRIAR)\s+(?:(?:A|O)\s+)?(?:LISTA|ESCALA)(?:\s+DO)?\s+PROXIMO\s+MES$/.test(normalized)) {
+    return generateNextMonthFromGroup();
+  }
   if (command === 'STATUS' || /\bMEU STATUS\b/.test(normalized)) return `*${member.rank} ${member.operational_name}*\nSituação: ${operationalLabel[member.operational_status] ?? member.operational_status}\nAutorização: ${authorizationLabel[member.authorization_status] ?? member.authorization_status}`;
   if (command === 'CRONOGRAMA' || /\b(?:VER|MOSTRAR|MOSTRA|QUERO VER)\s+(?:O\s+)?CRONOGRAMA\b/.test(normalized)) {
     return await buildMarkingSchedule() ?? 'Não há cronograma completo cadastrado na Antiguidade.';
@@ -525,7 +537,7 @@ function activeCompetency() {
   }
   const nextMonth = dayjs().add(1, 'month');
   return db.prepare(`SELECT c.* FROM competencies c JOIN service_slots s ON s.competency_id=c.id
-    WHERE c.year=? AND c.month=? GROUP BY c.id LIMIT 1`).get(nextMonth.year(), nextMonth.month())
+    WHERE c.year=? AND c.month=? GROUP BY c.id LIMIT 1`).get(nextMonth.year(), nextMonth.month() + 1)
     ?? db.prepare(`SELECT c.* FROM competencies c JOIN service_slots s ON s.competency_id=c.id
       WHERE s.service_date>=? GROUP BY c.id ORDER BY c.year,c.month LIMIT 1`).get(dayjs().format('YYYY-MM-DD'))
     ?? null;
@@ -880,21 +892,22 @@ async function schedulePdfMessage() {
 
 function memberAssignmentsMessage(member) {
   const competency = activeCompetency();
-  const rows = db.prepare(`SELECT s.id,s.service_date,s.period FROM assignments a JOIN service_slots s ON s.id=a.service_slot_id
+  const rows = db.prepare(`SELECT s.id,s.service_date,s.period,a.service_type FROM assignments a JOIN service_slots s ON s.id=a.service_slot_id
     WHERE a.member_id=? AND a.status='CONFIRMED' AND s.service_date>=? ORDER BY s.service_date,s.period LIMIT 20`).all(member.id, dayjs().format('YYYY-MM-DD'));
   const monthHours = competency ? Number(db.prepare(`SELECT COUNT(a.id)*12 AS hours FROM assignments a JOIN service_slots s ON s.id=a.service_slot_id
-    WHERE a.member_id=? AND a.status='CONFIRMED' AND s.competency_id=?`).get(member.id, competency.id).hours || 0) : 0;
+    WHERE a.member_id=? AND a.status='CONFIRMED' AND a.service_type='EXTRAORDINARY' AND s.competency_id=?`).get(member.id, competency.id).hours || 0) : 0;
   const hourLimit = memberHourLimit(member, competency);
-  if (!rows.length) return `Você não possui marcações futuras.\n\n*HORAS NO MÊS:* ${hourSummary(monthHours, hourLimit)}`;
+  if (!rows.length) return `Você não possui marcações futuras.\n\n*HORAS EXTRAS NO MÊS:* ${hourSummary(monthHours, hourLimit)}`;
   const firstId = rows[0].id;
-  return `*SUAS MARCAÇÕES*\n\n${rows.map((slot) => `ID ${slot.id} — ${dayjs(slot.service_date).format('DD/MM/YYYY')} | ${periodLabel(slot.period)} | 12h`).join('\n')}\n\n*HORAS NO MÊS:* ${hourSummary(monthHours, hourLimit)}\n\nPara retirar, responda:\n*cancelar ${firstId}*\n\nTambém funciona: /cancelar ${firstId}. Troque ${firstId} pelo ID desejado.`;
+  return `*SUAS MARCAÇÕES*\n\n${rows.map((slot) => `ID ${slot.id} — ${dayjs(slot.service_date).format('DD/MM/YYYY')} | ${periodLabel(slot.period)} | 12h | ${slot.service_type === 'ORDINARY' ? 'Ordinário' : 'Extra'}`).join('\n')}\n\n*HORAS EXTRAS NO MÊS:* ${hourSummary(monthHours, hourLimit)}\n\nPara retirar, responda:\n*cancelar ${firstId}*\n\nTambém funciona: /cancelar ${firstId}. Troque ${firstId} pelo ID desejado.`;
 }
 
 function memberHoursMessage(member) {
   const competency = activeCompetency();
   if (!competency) return 'Não há mês de escala ativo para consultar as horas.';
   const rows = db.prepare(`SELECT s.service_date,s.period FROM assignments a JOIN service_slots s ON s.id=a.service_slot_id
-    WHERE a.member_id=? AND a.status='CONFIRMED' AND s.competency_id=? ORDER BY s.service_date,s.period`).all(member.id, competency.id);
+    WHERE a.member_id=? AND a.status='CONFIRMED' AND a.service_type='EXTRAORDINARY'
+      AND s.competency_id=? ORDER BY s.service_date,s.period`).all(member.id, competency.id);
   const markedHours = rows.length * 12;
   const hourLimit = memberHourLimit(member, competency);
   const slotsByDate = new Map();
@@ -909,7 +922,7 @@ function memberHoursMessage(member) {
       return `${dayjs(date).format('DD/MM')} — ${fullDay ? '24h' : `${periodLabel(periods[0])} (12h)`}`;
     }).join('\n')
     : 'Nenhum horário confirmado neste mês.';
-  return `*HORAS — ${member.rank} ${member.operational_name}*\n\n*Mês:* ${competency.name}\n*Horas:* ${hourSummary(markedHours, hourLimit)}\n\n*HORÁRIOS CONFIRMADOS*\n${slots}`;
+  return `*HORAS EXTRAS — ${member.rank} ${member.operational_name}*\n\n*Mês:* ${competency.name}\n*Horas extras:* ${hourSummary(markedHours, hourLimit)}\n\n*SERVIÇOS EXTRAS CONFIRMADOS*\n${slots}`;
 }
 
 function eligible(member) {
@@ -1040,16 +1053,19 @@ function assignMemberToSlot(member, rawSlotId) {
     if (slot.service_date < dayjs().format('YYYY-MM-DD')) return { error: 'Não é possível marcar um horário já iniciado.' };
     const competency = db.prepare('SELECT current_hour_limit FROM competencies WHERE id=?').get(slot.competency_id);
     const markedHours = Number(db.prepare(`SELECT COUNT(a.id)*12 AS hours FROM assignments a JOIN service_slots s ON s.id=a.service_slot_id
-      WHERE a.member_id=? AND a.status='CONFIRMED' AND s.competency_id=?`).get(member.id, slot.competency_id).hours || 0);
+      WHERE a.member_id=? AND a.status='CONFIRMED' AND a.service_type='EXTRAORDINARY'
+        AND s.competency_id=?`).get(member.id, slot.competency_id).hours || 0);
     const hourLimit = memberHourLimit(member, competency);
     // O limite é somente um alerta administrativo neste momento: nunca bloqueia a marcação pelo WhatsApp.
     const unavailable = db.prepare(`SELECT 1 FROM unavailabilities WHERE member_id=? AND status='ACTIVE' AND starts_at<=? AND ends_at>=? LIMIT 1`).get(member.id, slot.ends_at, slot.starts_at);
     if (unavailable) return { error: 'Você possui uma indisponibilidade para esta data.' };
     const existing = db.prepare(`SELECT 1 FROM assignments WHERE service_slot_id=? AND member_id=? AND status='CONFIRMED'`).get(slot.id, member.id);
     if (existing) return { error: 'Você já está marcado neste horário.' };
-    const maxPosition = Number(db.prepare('SELECT COALESCE(MAX(position_number),0) AS value FROM assignments WHERE service_slot_id=?').get(slot.id).value);
-    const position = maxPosition + 1;
-    if (position > slot.current_capacity) return { error: 'Esta vaga não possui mais uma posição livre.' };
+    const occupiedPositions = new Set(db.prepare(`SELECT position_number FROM assignments
+      WHERE service_slot_id=? AND status='CONFIRMED'`).all(slot.id).map((item) => Number(item.position_number)));
+    const position = Array.from({ length: Number(slot.current_capacity) }, (_, index) => index + 1)
+      .find((candidate) => !occupiedPositions.has(candidate));
+    if (!position) return { error: 'Esta vaga não possui mais uma posição livre.' };
     const protocol = `BOT-${Date.now()}-${member.id}-${slot.id}`;
     db.prepare(`INSERT INTO assignments (service_slot_id,position_number,member_id,service_type,status,protocol,confirmed_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)`).run(slot.id, position, member.id, 'EXTRAORDINARY', 'CONFIRMED', protocol, now(), now(), now());
     audit({ memberId: member.id, action: 'BOT_ASSIGNMENT', entityType: 'ASSIGNMENT', entityId: protocol, after: { slotId: slot.id, position }, reason: 'Marcação por WhatsApp' });
@@ -1062,8 +1078,9 @@ function assignMemberToSlot(member, rawSlotId) {
 function cancelMemberAssignment(member, rawSlotId) {
   const slotId = Number(rawSlotId);
   if (!Number.isInteger(slotId) || slotId < 1) return 'Informe o código do horário. Exemplo: /cancelar 125';
-  const assignment = db.prepare(`SELECT a.id,s.service_date,s.period FROM assignments a JOIN service_slots s ON s.id=a.service_slot_id WHERE a.service_slot_id=? AND a.member_id=? AND a.status='CONFIRMED'`).get(slotId, member.id);
+  const assignment = db.prepare(`SELECT a.id,a.service_type,s.service_date,s.period FROM assignments a JOIN service_slots s ON s.id=a.service_slot_id WHERE a.service_slot_id=? AND a.member_id=? AND a.status='CONFIRMED'`).get(slotId, member.id);
   if (!assignment) return 'Não encontrei uma marcação sua com este código.';
+  if (assignment.service_type === 'ORDINARY') return 'O serviço ordinário não pode ser retirado pelo grupo. Procure o escalante para ajustar sua situação.';
   if (assignment.service_date < dayjs().format('YYYY-MM-DD')) return 'Não é possível cancelar um horário já iniciado.';
   db.prepare('DELETE FROM assignments WHERE id=?').run(assignment.id);
   audit({ memberId: member.id, action: 'BOT_CANCELLATION', entityType: 'ASSIGNMENT', entityId: assignment.id, reason: 'Cancelamento por WhatsApp' });

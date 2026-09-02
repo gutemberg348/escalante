@@ -182,6 +182,41 @@ const migrations = [
         db.exec('ALTER TABLE members ADD COLUMN hour_limit_exempt INTEGER NOT NULL DEFAULT 0');
       }
     }
+  },
+  {
+    version: '012_position_one_is_ordinary',
+    apply() {
+      db.exec(`CREATE TABLE IF NOT EXISTS ordinary_rotations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        member_id INTEGER NOT NULL,
+        position_number INTEGER NOT NULL CHECK(position_number IN (1,2)),
+        anchor_date TEXT NOT NULL,
+        active INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(member_id,position_number),
+        FOREIGN KEY(member_id) REFERENCES members(id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_ordinary_rotations_active
+        ON ordinary_rotations(active,position_number);`);
+      db.prepare(`UPDATE assignments SET service_type='ORDINARY',updated_at=?
+        WHERE position_number=1 AND status='CONFIRMED'`).run(now());
+      const stamp = now();
+      db.prepare(`WITH member_anchors AS (
+          SELECT a.member_id,a.position_number,MAX(s.service_date) AS anchor_date
+          FROM assignments a JOIN service_slots s ON s.id=a.service_slot_id
+          WHERE a.status='CONFIRMED' AND a.service_type='ORDINARY' AND a.position_number IN (1,2)
+          GROUP BY a.member_id,a.position_number
+        ), position_latest AS (
+          SELECT position_number,MAX(anchor_date) AS latest_date
+          FROM member_anchors GROUP BY position_number
+        )
+        INSERT OR IGNORE INTO ordinary_rotations
+          (member_id,position_number,anchor_date,active,created_at,updated_at)
+        SELECT a.member_id,a.position_number,a.anchor_date,1,?,?
+        FROM member_anchors a JOIN position_latest p ON p.position_number=a.position_number
+        WHERE julianday(a.anchor_date)>=julianday(p.latest_date)-4`).run(stamp, stamp);
+    }
   }
 ];
 

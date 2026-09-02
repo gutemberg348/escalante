@@ -1,7 +1,7 @@
 module.exports = {
   apps: [{
     name: 'escala-cicc-api',
-    cwd: '/var/www/escala-cicc/backend',
+    cwd: '/var/www/bot_escala/escalante/backend',
     script: 'src/server.js',
     interpreter: 'node',
     instances: 1,
