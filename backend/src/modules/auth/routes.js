@@ -8,6 +8,10 @@ import { requireAuth } from '../../middlewares/auth.js';
 
 const router = Router();
 const loginSchema = z.object({ email: z.string().email(), password: z.string().min(1) });
+const changePasswordSchema = z.object({
+  currentPassword: z.string().min(1),
+  newPassword: z.string().min(12)
+});
 router.post('/login', async (req, res, next) => {
   try {
     const { email, password } = loginSchema.parse(req.body);
@@ -29,10 +33,13 @@ router.get('/me', requireAuth, (req, res) => {
 });
 router.post('/change-password', requireAuth, async (req, res, next) => {
   try {
-    const { password } = z.object({ password: z.string().min(12) }).parse(req.body);
-    db.prepare('UPDATE users SET password_hash=?, must_change_password=0, updated_at=? WHERE id=?').run(await argon2.hash(password), now(), req.user.id);
+    const { currentPassword, newPassword } = changePasswordSchema.parse(req.body);
+    const user = db.prepare('SELECT id,password_hash FROM users WHERE id=? AND active=1').get(req.user.id);
+    if (!user || !(await argon2.verify(user.password_hash, currentPassword))) return res.status(400).json({ message: 'A senha atual está incorreta.' });
+    if (await argon2.verify(user.password_hash, newPassword)) return res.status(400).json({ message: 'A nova senha precisa ser diferente da senha atual.' });
+    db.prepare('UPDATE users SET password_hash=?, must_change_password=0, updated_at=? WHERE id=?').run(await argon2.hash(newPassword), now(), req.user.id);
     audit({ userId: req.user.id, action: 'PASSWORD_CHANGED', entityType: 'USER', entityId: req.user.id, req });
-    res.status(204).end();
+    res.json({ message: 'Senha alterada com sucesso.' });
   } catch (error) { next(error); }
 });
 export default router;

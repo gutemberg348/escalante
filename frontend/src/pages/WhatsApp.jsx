@@ -10,10 +10,12 @@ export default function WhatsApp() {
     queryKey: ['whatsapp'], queryFn: () => api.get('/whatsapp/status').then((response) => response.data.item),
     refetchInterval: (query) => ['CONNECTING', 'RECONNECTING', 'WAITING_QR'].includes(query.state.data?.status) ? 2000 : 5000
   });
-  const [settings, setSettings] = useState({ targetNumber: '', groupJids: [] });
-  useEffect(() => { if (connection) setSettings({ targetNumber: connection.configuredNumber || '', groupJids: connection.groupJids?.length ? connection.groupJids : (connection.groupJid ? [connection.groupJid] : []) }); }, [connection]);
+  const { data: competencies = [] } = useQuery({ queryKey: ['competencies'], queryFn: () => api.get('/competencies').then((response) => response.data.items) });
+  const generatedCompetencies = competencies.filter((item) => item.generated_at);
+  const [settings, setSettings] = useState({ targetNumber: '', groupJids: [], activeCompetencyId: '' });
+  useEffect(() => { if (connection) setSettings({ targetNumber: connection.configuredNumber || '', groupJids: connection.groupJids?.length ? connection.groupJids : (connection.groupJid ? [connection.groupJid] : []), activeCompetencyId: connection.activeCompetencyId ? String(connection.activeCompetencyId) : '' }); }, [connection]);
   const refreshConnection = () => queryClient.invalidateQueries({ queryKey: ['whatsapp'] });
-  const save = useMutation({ mutationFn: () => api.put('/whatsapp/settings', settings), onSuccess: refreshConnection });
+  const save = useMutation({ mutationFn: () => api.put('/whatsapp/settings', { ...settings, activeCompetencyId: settings.activeCompetencyId ? Number(settings.activeCompetencyId) : null }), onSuccess: refreshConnection });
   const connect = useMutation({ mutationFn: () => api.post('/whatsapp/connect'), onSuccess: refreshConnection });
   const disconnect = useMutation({ mutationFn: () => api.post('/whatsapp/disconnect'), onSuccess: refreshConnection });
   const resetSession = useMutation({ mutationFn: () => api.post('/whatsapp/reset-session'), onSuccess: refreshConnection });
@@ -45,7 +47,8 @@ export default function WhatsApp() {
         <form onSubmit={(event) => { event.preventDefault(); save.mutate(); }}>
           <label>Número do WhatsApp<input value={settings.targetNumber} onChange={(event) => set('targetNumber', event.target.value.replace(/\D/g, ''))} inputMode="numeric" placeholder="Ex.: 5583999999999" /><small>Somente números, com DDI e DDD.</small></label>
           <label>Grupos de destino<select className="group-multi-select" multiple size="6" value={settings.groupJids} onChange={(event) => set('groupJids', [...event.target.selectedOptions].map((option) => option.value))}>{groups.data?.map((group) => <option key={group.jid} value={group.jid}>{group.name}</option>)}</select><small>Use Ctrl (Windows) ou ⌘ (Mac) para selecionar mais de um grupo.</small></label>
-          <button disabled={save.isPending}>Salvar grupos ({settings.groupJids.length})</button>{save.isSuccess && <p className="success">Grupos salvos.</p>}{save.isError && <p className="error">{save.error.response?.data?.message || 'Confira os grupos selecionados.'}</p>}
+          <label>Mês enviado pelo /escala<select value={settings.activeCompetencyId} onChange={(event) => set('activeCompetencyId', event.target.value)}><option value="">Selecione um mês gerado</option>{generatedCompetencies.map((competency) => <option key={competency.id} value={competency.id}>{competency.name}</option>)}</select><small>Se este mês ficar no passado, o bot avança sozinho para o próximo mês gerado.</small></label>
+          <button disabled={save.isPending || !settings.activeCompetencyId}>Salvar WhatsApp ({settings.groupJids.length} grupos)</button>{save.isSuccess && <p className="success">Grupos e mês da escala salvos.</p>}{save.isError && <p className="error">{save.error.response?.data?.message || 'Confira os grupos e o mês selecionado.'}</p>}
         </form>
       </article>
     </section>

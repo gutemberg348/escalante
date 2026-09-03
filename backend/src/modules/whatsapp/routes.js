@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { allow } from '../../middlewares/auth.js';
-import { audit } from '../../database/index.js';
+import { audit, db } from '../../database/index.js';
 import { connectWhatsApp, disconnectWhatsApp, getWhatsAppGroups, getWhatsAppStatus, resetWhatsAppSession, saveWhatsAppSettings, sendMarkingSchedule } from '../../messaging/whatsapp.js';
 import { getAutomationSettings, refreshWhatsAppAutomation, saveAutomationSettings, sendDailySchedule, sendMarkingReminder, sendMonthlyOpening } from '../../messaging/automation.js';
 
@@ -9,7 +9,8 @@ const router = Router();
 const settingsSchema = z.object({
   targetNumber: z.string().regex(/^\d{10,15}$/).optional().or(z.literal('')),
   groupJid: z.string().endsWith('@g.us').optional().or(z.literal('')),
-  groupJids: z.array(z.string().endsWith('@g.us')).max(20).optional()
+  groupJids: z.array(z.string().endsWith('@g.us')).max(20).optional(),
+  activeCompetencyId: z.number().int().positive().nullable().optional()
 });
 const automationSchema = z.object({
   dailyEnabled: z.boolean(),
@@ -25,6 +26,9 @@ router.get('/status', (req, res) => res.json({ item: getWhatsAppStatus() }));
 router.put('/settings', allow('ADMIN'), (req, res, next) => {
   try {
     const input = settingsSchema.parse(req.body);
+    if (input.activeCompetencyId && !db.prepare('SELECT id FROM competencies WHERE id=? AND generated_at IS NOT NULL').get(input.activeCompetencyId)) {
+      return res.status(400).json({ message: 'Selecione um mês que já foi gerado.' });
+    }
     const item = saveWhatsAppSettings({ ...input, userId: req.user.id });
     audit({ userId: req.user.id, action: 'UPDATE', entityType: 'WHATSAPP_SETTINGS', entityId: 'default', after: input, req });
     res.json({ item });

@@ -5,7 +5,7 @@ import {
   advanceExpiredMarkingTurn, getWhatsAppStatus, notifyCurrentMarkingTurn,
   sendMarkingSchedule, sendWhatsAppDocument, sendWhatsAppText
 } from './whatsapp.js';
-import { ensureCompetencySchedule, generateOrdinaryAssignments } from '../scheduling/monthly.js';
+import { ensureCompetencySchedule, generateNextMonthSchedule, generateOrdinaryAssignments } from '../scheduling/monthly.js';
 
 const weekdayNames = ['domingo', 'segunda-feira', 'terça-feira', 'quarta-feira', 'quinta-feira', 'sexta-feira', 'sábado'];
 const readSetting = (key) => db.prepare('SELECT value FROM system_settings WHERE key=?').get(key)?.value ?? '';
@@ -186,13 +186,16 @@ export async function sendDailySchedule({ force = false } = {}) {
   return { sent: true };
 }
 
-export async function sendMonthlyOpening({ force = false } = {}) {
+export async function sendMonthlyOpening({ force = false, advance = false } = {}) {
   if (getWhatsAppStatus().status !== 'CONNECTED') return { sent: false, reason: 'WhatsApp desconectado.' };
   const nextMonth = dayjs().add(1, 'month').startOf('month');
-  const monthKey = nextMonth.format('YYYY-MM');
+  const advancedGeneration = advance
+    ? generateNextMonthSchedule({ reason: 'Geração do próximo mês solicitada pelo grupo' })
+    : null;
+  const competency = advancedGeneration?.competency ?? ensureCompetencySchedule(nextMonth).competency;
+  const monthKey = `${competency.year}-${String(competency.month).padStart(2, '0')}`;
   if (!force && readSetting('automation_last_monthly_run') === monthKey) return { sent: false, reason: 'A abertura do próximo mês já foi enviada.' };
   const firstOpening = readSetting('automation_last_monthly_run') !== monthKey;
-  const { competency } = ensureCompetencySchedule(nextMonth);
   const administrator = db.prepare(`SELECT id FROM users WHERE role='ADMIN' AND active=1 ORDER BY id LIMIT 1`).get();
   if (administrator && firstOpening) {
     const stamp = now();
@@ -203,11 +206,11 @@ export async function sendMonthlyOpening({ force = false } = {}) {
     writeSetting('bot_active_competency_id', competency.id, administrator.id);
     writeSetting('bot_active_marking_column', 2, administrator.id);
   }
-  const generation = generateOrdinaryAssignments({
-    competencyId: competency.id,
-    userId: administrator?.id ?? null,
-    reason: 'Geração e publicação do próximo mês no WhatsApp'
-  });
+  const generation = advancedGeneration ?? generateOrdinaryAssignments({
+      competencyId: competency.id,
+      userId: administrator?.id ?? null,
+      reason: 'Geração e publicação do próximo mês no WhatsApp'
+    });
   const pdf = await buildSchedulePdf({ competency, slots: scheduleRows(competency.id) });
   await sendWhatsAppDocument({
     buffer: pdf,

@@ -158,14 +158,34 @@ export function generateOrdinaryAssignments({ competencyId, userId = null, reaso
     unavailableDays,
     conflictDays
   };
+  db.prepare(`UPDATE competencies SET generated_at=COALESCE(generated_at,?),status=CASE WHEN status='CONFIGURING' THEN 'DRAFT' ELSE status END,updated_at=? WHERE id=?`)
+    .run(now(), now(), competency.id);
   if (assignmentsCreated > 0 || assignmentsReclassified > 0) {
     audit({ userId, action: 'GENERATE_ORDINARY_SCHEDULE', entityType: 'COMPETENCY', entityId: competency.id, after: result, reason });
   }
   return result;
 }
 
+export function regenerateOrdinaryAssignments({ competencyId, userId = null, reason = 'Regeneração manual da escala ordinária' }) {
+  const competency = db.prepare('SELECT * FROM competencies WHERE id=?').get(competencyId);
+  if (!competency) throw new Error('Mês não encontrado para regenerar a escala ordinária.');
+  const ordinaryAssignments = db.prepare(`SELECT a.* FROM assignments a JOIN service_slots s ON s.id=a.service_slot_id
+    WHERE s.competency_id=? AND a.status='CONFIRMED' AND a.service_type='ORDINARY'`).all(competencyId);
+  const removed = db.transaction(() => {
+    const remove = db.prepare('DELETE FROM assignments WHERE id=?');
+    for (const assignment of ordinaryAssignments) remove.run(assignment.id);
+    return ordinaryAssignments.length;
+  })();
+  if (removed) audit({ userId, action: 'RESET_ORDINARY_SCHEDULE', entityType: 'COMPETENCY', entityId: competencyId, before: { assignments: ordinaryAssignments }, reason });
+  return { ...generateOrdinaryAssignments({ competencyId, userId, reason }), assignmentsRemoved: removed };
+}
+
 export function generateNextMonthSchedule({ userId = null, reason } = {}) {
-  const target = dayjs().add(1, 'month').startOf('month');
+  const current = dayjs().startOf('month');
+  const latest = db.prepare(`SELECT year,month FROM competencies WHERE generated_at IS NOT NULL ORDER BY year DESC,month DESC LIMIT 1`).get();
+  const latestDate = latest ? dayjs(`${latest.year}-${String(latest.month).padStart(2, '0')}-01`) : null;
+  const base = latestDate?.isAfter(current, 'month') ? latestDate : current;
+  const target = base.add(1, 'month');
   const prepared = ensureCompetencySchedule(target);
   return {
     ...generateOrdinaryAssignments({ competencyId: prepared.competency.id, userId, reason }),

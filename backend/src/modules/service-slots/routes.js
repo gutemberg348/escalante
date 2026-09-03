@@ -93,7 +93,7 @@ router.get('/available', (req, res) => res.json({
 router.get('/manage', (req, res, next) => {
   try {
     const competencyId = z.coerce.number().int().positive().parse(req.query.competency_id);
-    const competency = db.prepare('SELECT id,name,year,month,status FROM competencies WHERE id=?').get(competencyId);
+    const competency = db.prepare('SELECT id,name,year,month,status,generated_at FROM competencies WHERE id=? AND generated_at IS NOT NULL').get(competencyId);
     if (!competency) return res.status(404).json({ message: 'Mês da escala não encontrado.' });
     const slots = db.prepare(`SELECT s.*,a.id AS assignment_id,a.position_number,a.member_id,a.service_type,m.rank,m.operational_name
       FROM service_slots s
@@ -119,7 +119,7 @@ router.get('/manage', (req, res, next) => {
 router.get('/pdf', (req, res, next) => {
   try {
     const competencyId = z.coerce.number().int().positive().parse(req.query.competency_id);
-    const competency = db.prepare('SELECT * FROM competencies WHERE id=?').get(competencyId);
+    const competency = db.prepare('SELECT * FROM competencies WHERE id=? AND generated_at IS NOT NULL').get(competencyId);
     if (!competency) return res.status(404).json({ message: 'Mês da escala não encontrado.' });
     buildSchedulePdf({ competency, slots: scheduleRows(competencyId) })
       .then((buffer) => {
@@ -134,7 +134,7 @@ router.put('/:slotId/positions/:positionNumber', allow('ADMIN', 'SCHEDULER'), (r
   try {
     const slotId = z.coerce.number().int().positive().parse(req.params.slotId);
     const positionNumber = z.coerce.number().int().min(1).max(4).parse(req.params.positionNumber);
-    const { memberId } = z.object({ memberId: z.number().int().positive().nullable() }).parse(req.body);
+    const { memberId, serviceType } = z.object({ memberId: z.number().int().positive().nullable(), serviceType: z.enum(['ORDINARY', 'EXTRAORDINARY']).optional() }).parse(req.body);
     const slot = manualSlot(slotId);
     if (positionNumber > slot.current_capacity) return res.status(400).json({ message: 'Esta posição ainda está trancada para o turno selecionado.' });
     const existing = db.prepare(`SELECT a.*,m.rank,m.operational_name FROM assignments a JOIN members m ON m.id=a.member_id
@@ -150,14 +150,14 @@ router.put('/:slotId/positions/:positionNumber', allow('ADMIN', 'SCHEDULER'), (r
     if (duplicate) return res.status(409).json({ message: 'Este militar já está confirmado neste turno.' });
     let assignment;
     if (existing) {
-      db.prepare('UPDATE assignments SET member_id=?,updated_at=? WHERE id=?').run(memberId, now(), existing.id);
+      db.prepare('UPDATE assignments SET member_id=?,service_type=COALESCE(?,service_type),updated_at=? WHERE id=?').run(memberId, serviceType || null, now(), existing.id);
       assignment = db.prepare('SELECT * FROM assignments WHERE id=?').get(existing.id);
       audit({ userId: req.user.id, action: 'MANUAL_ASSIGNMENT_REPLACE', entityType: 'ASSIGNMENT', entityId: existing.id, before: existing, after: assignment, req });
     } else {
       const stamp = now();
       const result = db.prepare(`INSERT INTO assignments
         (service_slot_id,position_number,member_id,service_type,status,protocol,confirmed_at,created_at,updated_at)
-        VALUES (?,?,?,'EXTRAORDINARY','CONFIRMED',?,?,?,?)`).run(slotId, positionNumber, member.id, `MANUAL-${randomUUID()}`, stamp, stamp, stamp);
+        VALUES (?,?,?,?,'CONFIRMED',?,?,?,?)`).run(slotId, positionNumber, member.id, serviceType || 'EXTRAORDINARY', `MANUAL-${randomUUID()}`, stamp, stamp, stamp);
       assignment = db.prepare('SELECT * FROM assignments WHERE id=?').get(result.lastInsertRowid);
       audit({ userId: req.user.id, action: 'MANUAL_ASSIGNMENT_CREATE', entityType: 'ASSIGNMENT', entityId: assignment.id, after: assignment, req });
     }
@@ -177,13 +177,37 @@ router.post('/assignments/:id/move', allow('ADMIN', 'SCHEDULER'), (req, res, nex
     if (target.competency_id !== assignment.competency_id) return res.status(400).json({ message: 'A vaga de destino deve pertencer ao mesmo mês da escala.' });
     if (input.targetSlotId === assignment.service_slot_id && input.targetPosition === assignment.position_number) return res.status(400).json({ message: 'Selecione uma vaga de destino diferente.' });
     if (input.targetPosition > target.current_capacity) return res.status(400).json({ message: 'A posição de destino ainda está trancada.' });
-    const occupied = db.prepare(`SELECT id FROM assignments WHERE service_slot_id=? AND position_number=? AND status='CONFIRMED'`).get(input.targetSlotId, input.targetPosition);
-    if (occupied) return res.status(409).json({ message: 'A vaga de destino acabou de ser preenchida.' });
-    const duplicate = db.prepare(`SELECT id FROM assignments WHERE service_slot_id=? AND member_id=? AND status='CONFIRMED' AND id<>?`).get(input.targetSlotId, assignment.member_id, assignmentId);
+    const occupied = db.prepare(`SELECT * FROM assignments WHERE service_slot_id=? AND position_number=? AND status='CONFIRMED'`).get(input.targetSlotId, input.targetPosition);
+    const duplicate = db.prepare(`SELECT id FROM assignments WHERE service_slot_id=? AND member_id=? AND status='CONFIRMED' AND id NOT IN (?,?)`).get(input.targetSlotId, assignment.member_id, assignmentId, occupied?.id ?? 0);
     if (duplicate) return res.status(409).json({ message: 'O militar já está confirmado no turno de destino.' });
-    db.prepare('UPDATE assignments SET service_slot_id=?,position_number=?,updated_at=? WHERE id=?').run(input.targetSlotId, input.targetPosition, now(), assignmentId);
+    if (occupied) {
+      const reverseDuplicate = db.prepare(`SELECT id FROM assignments WHERE service_slot_id=? AND member_id=? AND status='CONFIRMED' AND id NOT IN (?,?)`).get(assignment.service_slot_id, occupied.member_id, assignmentId, occupied.id);
+      if (reverseDuplicate) return res.status(409).json({ message: 'O militar da posição de destino já está no turno de origem.' });
+      db.transaction(() => {
+        db.prepare('UPDATE assignments SET position_number=?,updated_at=? WHERE id=?').run(-assignmentId, now(), assignmentId);
+        db.prepare('UPDATE assignments SET service_slot_id=?,position_number=?,updated_at=? WHERE id=?').run(assignment.service_slot_id, assignment.position_number, now(), occupied.id);
+        db.prepare('UPDATE assignments SET service_slot_id=?,position_number=?,updated_at=? WHERE id=?').run(input.targetSlotId, input.targetPosition, now(), assignmentId);
+      })();
+    } else {
+      db.prepare('UPDATE assignments SET service_slot_id=?,position_number=?,updated_at=? WHERE id=?').run(input.targetSlotId, input.targetPosition, now(), assignmentId);
+    }
     const item = db.prepare('SELECT * FROM assignments WHERE id=?').get(assignmentId);
-    audit({ userId: req.user.id, action: 'MANUAL_ASSIGNMENT_MOVE', entityType: 'ASSIGNMENT', entityId: assignmentId, before: assignment, after: item, req });
+    audit({ userId: req.user.id, action: occupied ? 'MANUAL_ASSIGNMENT_SWAP' : 'MANUAL_ASSIGNMENT_MOVE', entityType: 'ASSIGNMENT', entityId: assignmentId, before: { assignment, occupied }, after: item, req });
+    res.json({ item, swapped: Boolean(occupied) });
+  } catch (error) { next(error); }
+});
+
+router.patch('/assignments/:id/type', allow('ADMIN', 'SCHEDULER'), (req, res, next) => {
+  try {
+    const assignmentId = z.coerce.number().int().positive().parse(req.params.id);
+    const { serviceType } = z.object({ serviceType: z.enum(['ORDINARY', 'EXTRAORDINARY']) }).parse(req.body);
+    const before = db.prepare(`SELECT a.*,s.status AS slot_status,s.homologated_at FROM assignments a
+      JOIN service_slots s ON s.id=a.service_slot_id WHERE a.id=? AND a.status='CONFIRMED'`).get(assignmentId);
+    if (!before) return res.status(404).json({ message: 'Marcação não encontrada.' });
+    if (before.slot_status !== 'OPEN' || before.homologated_at) return res.status(400).json({ message: 'Não é possível alterar um horário fechado ou homologado.' });
+    db.prepare('UPDATE assignments SET service_type=?,updated_at=? WHERE id=?').run(serviceType, now(), assignmentId);
+    const item = db.prepare('SELECT * FROM assignments WHERE id=?').get(assignmentId);
+    audit({ userId: req.user.id, action: 'MANUAL_ASSIGNMENT_TYPE_CHANGE', entityType: 'ASSIGNMENT', entityId: assignmentId, before, after: item, req });
     res.json({ item });
   } catch (error) { next(error); }
 });

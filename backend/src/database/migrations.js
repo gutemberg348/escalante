@@ -217,6 +217,20 @@ const migrations = [
         FROM member_anchors a JOIN position_latest p ON p.position_number=a.position_number
         WHERE julianday(a.anchor_date)>=julianday(p.latest_date)-4`).run(stamp, stamp);
     }
+  },
+  {
+    version: '013_generated_competencies',
+    apply() {
+      const columns = db.prepare('PRAGMA table_info(competencies)').all();
+      if (!columns.some((column) => column.name === 'generated_at')) {
+        db.exec('ALTER TABLE competencies ADD COLUMN generated_at TEXT');
+      }
+      db.prepare(`UPDATE competencies SET generated_at=COALESCE(generated_at,updated_at)
+        WHERE generated_at IS NULL AND EXISTS (
+          SELECT 1 FROM service_slots s JOIN assignments a ON a.service_slot_id=s.id
+          WHERE s.competency_id=competencies.id AND a.status='CONFIRMED'
+        )`).run();
+    }
   }
 ];
 

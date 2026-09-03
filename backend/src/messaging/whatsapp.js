@@ -33,6 +33,7 @@ function configuredGroupJids() {
 }
 
 function publicStatus() {
+  const active = activeCompetency();
   return {
     status: connection.status,
     qrDataUrl: connection.qrDataUrl,
@@ -44,7 +45,9 @@ function publicStatus() {
     lastDisconnectCode: connection.lastDisconnectCode,
     configuredNumber: readSetting('whatsapp_target_number'),
     groupJid: configuredGroupJids()[0] ?? '',
-    groupJids: configuredGroupJids()
+    groupJids: configuredGroupJids(),
+    activeCompetencyId: active?.id ?? null,
+    activeCompetencyName: active?.name ?? null
   };
 }
 
@@ -66,13 +69,21 @@ function hasStoredWhatsAppSession() {
 }
 
 export function getWhatsAppStatus() { return publicStatus(); }
-export function saveWhatsAppSettings({ targetNumber, groupJid, groupJids, userId }) {
+export function setActiveWhatsAppCompetency(competencyId, userId = null) {
+  const competency = db.prepare('SELECT * FROM competencies WHERE id=? AND generated_at IS NOT NULL').get(competencyId);
+  if (!competency) throw new Error('Selecione um mês que já foi gerado.');
+  writeSetting('bot_active_competency_id', String(competency.id), userId);
+  return competency;
+}
+
+export function saveWhatsAppSettings({ targetNumber, groupJid, groupJids, activeCompetencyId, userId }) {
   const normalizedGroups = [...new Set((Array.isArray(groupJids) ? groupJids : [groupJid])
     .filter((jid) => typeof jid === 'string' && jid.endsWith('@g.us')))];
   writeSetting('whatsapp_target_number', targetNumber ?? '', userId);
   // Mantém a chave antiga para instalações já configuradas e grava a lista nova.
   writeSetting('whatsapp_group_jid', normalizedGroups[0] ?? '', userId);
   writeSetting('whatsapp_group_jids', JSON.stringify(normalizedGroups), userId);
+  if (activeCompetencyId) setActiveWhatsAppCompetency(activeCompetencyId, userId);
   return publicStatus();
 }
 
@@ -241,6 +252,8 @@ function mentionsBot(socket, message) {
 
 function isAddressedToBot(socket, message, body) {
   if (body.startsWith('/')) return true;
+  const normalized = body.trim().toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  if (['COMANDOS', 'MENU', 'AJUDA'].includes(normalized)) return true;
   const context = messageContextInfo(message);
   if (!context) return false;
   const accounts = botAccounts(socket);
@@ -481,17 +494,80 @@ Outros atalhos:
 */horas @pessoa* - horas e horários confirmados de um militar
 */cronograma* - ordem completa da antiguidade e o horário limite de cada militar
 */escala* - recebe a escala em PDF
-*/gerar-proximo-mes* - gera a escala ordinária 1x4 e publica o PDF
+*/meses* - mostra os meses gerados e qual está ativo
+*/escala 10/2026* - troca o mês ativo e envia o novo PDF
+*/gerar-proximo-mes* - mostra o aviso antes de gerar
+*/confirmar-gerar-proximo-mes* - confirma a geração e publica o PDF
 */cancelar 125* - cancela uma marcação
-*/passo a vez* - não marca nesta rodada`;
+*/passo a vez* - não marca nesta rodada
+
+Envie */comandos* ou apenas *comandos* para ver esta lista.`;
+}
+
+const commandMonthNames = ['JANEIRO', 'FEVEREIRO', 'MARCO', 'ABRIL', 'MAIO', 'JUNHO', 'JULHO', 'AGOSTO', 'SETEMBRO', 'OUTUBRO', 'NOVEMBRO', 'DEZEMBRO'];
+
+function findGeneratedCompetency(selector) {
+  const normalized = selector.trim().toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  const competencies = db.prepare('SELECT * FROM competencies WHERE generated_at IS NOT NULL ORDER BY year,month').all();
+  if (/PROXIM[OA]/.test(normalized)) {
+    const active = activeCompetency();
+    const activeIndex = active ? active.year * 12 + active.month : dayjs().year() * 12 + dayjs().month() + 1;
+    return competencies.find((item) => item.year * 12 + item.month > activeIndex) ?? null;
+  }
+  let month = null;
+  let year = null;
+  const numeric = normalized.match(/\b(0?[1-9]|1[0-2])\s*[\/-]\s*(20\d{2})\b/);
+  const iso = normalized.match(/\b(20\d{2})\s*-\s*(0?[1-9]|1[0-2])\b/);
+  if (numeric) { month = Number(numeric[1]); year = Number(numeric[2]); }
+  else if (iso) { year = Number(iso[1]); month = Number(iso[2]); }
+  else {
+    month = commandMonthNames.findIndex((name) => normalized.includes(name)) + 1 || null;
+    year = Number(normalized.match(/\b20\d{2}\b/)?.[0]) || null;
+  }
+  if (!month) return null;
+  if (year) return competencies.find((item) => item.year === year && item.month === month) ?? null;
+  const currentIndex = dayjs().year() * 12 + dayjs().month() + 1;
+  return competencies.find((item) => item.month === month && item.year * 12 + item.month >= currentIndex)
+    ?? [...competencies].reverse().find((item) => item.month === month)
+    ?? null;
+}
+
+function generatedCompetenciesMessage() {
+  const active = activeCompetency();
+  const items = db.prepare('SELECT id,name FROM competencies WHERE generated_at IS NOT NULL ORDER BY year DESC,month DESC LIMIT 18').all();
+  if (!items.length) return 'Nenhum mês foi gerado ainda.';
+  return `*MESES GERADOS*\n\n${items.map((item) => `${item.id === active?.id ? '✅' : '•'} ${item.name}${item.id === active?.id ? ' — ativa no /escala' : ''}`).join('\n')}\n\nPara trocar e enviar o PDF:\n*/escala 10/2026*`;
+}
+
+async function activateCompetencyFromGroup(selector, member) {
+  const competency = findGeneratedCompetency(selector);
+  if (!competency) return `Não encontrei esse mês entre as escalas geradas. Envie */meses* para consultar.`;
+  setActiveWhatsAppCompetency(competency.id, null);
+  audit({ action: 'BOT_ACTIVE_COMPETENCY_CHANGE', entityType: 'COMPETENCY', entityId: competency.id, after: competency, reason: `Alterada pelo grupo por ${member.rank} ${member.operational_name}` });
+  const pdf = await schedulePdfMessage();
+  return {
+    type: 'TEXT',
+    text: `*MÊS DA ESCALA ALTERADO*\n\nAgora o comando */escala* enviará *${competency.name}*.`,
+    mentions: [],
+    pdf: pdf?.type === 'PDF' ? pdf : null
+  };
 }
 
 async function generateNextMonthFromGroup() {
   const { sendMonthlyOpening } = await import('./automation.js');
-  const result = await sendMonthlyOpening({ force: true });
+  const result = await sendMonthlyOpening({ force: true, advance: true });
   if (!result.sent) return result.reason || 'Não foi possível gerar o próximo mês.';
   const generation = result.generation;
   return `*PRÓXIMO MÊS GERADO*\n\n*${result.competency.name}*\n${generation.ordinaryDutyDays} serviços ordinários programados no ciclo 1x4.\n${generation.assignmentsCreated} turnos ordinários novos.\n${generation.skippedMembers.length} integrantes ignorados por situação ou autorização.\n${generation.unavailableDays.length} serviços não preenchidos por indisponibilidade.\n${generation.conflictDays.length} conflitos para revisão no painel.\n\nO PDF foi publicado no grupo. As marcações restantes serão extras.`;
+}
+
+function nextMonthGenerationWarning() {
+  const latest = db.prepare('SELECT year,month FROM competencies WHERE generated_at IS NOT NULL ORDER BY year DESC,month DESC LIMIT 1').get();
+  const current = dayjs().startOf('month');
+  const latestDate = latest ? dayjs(`${latest.year}-${String(latest.month).padStart(2, '0')}-01`) : current;
+  const target = (latestDate.isAfter(current, 'month') ? latestDate : current).add(1, 'month');
+  const monthName = commandMonthNames[target.month()];
+  return `⚠️ *CONFIRMAR GERAÇÃO DO PRÓXIMO MÊS*\n\nSerá criada a escala de *${monthName} de ${target.year()}* com o ciclo ordinário 1x4.\n\n• O mês atual não será apagado.\n• O novo PDF será publicado nos grupos.\n• O novo mês passará a ser usado pelo comando /escala.\n• A fila de marcação poderá ser iniciada.\n\nPara continuar, envie exatamente:\n*/confirmar-gerar-proximo-mes*\n\nPara desistir, não envie a confirmação.`;
 }
 
 async function executeCommand(member, rawBody, { explicitSlash = false, targetMember = null } = {}) {
@@ -499,8 +575,12 @@ async function executeCommand(member, rawBody, { explicitSlash = false, targetMe
   const normalized = commandBody.toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
   const [command, argument] = normalized.split(/\s+/, 2);
   if (['MENU', 'AJUDA', 'COMANDOS'].includes(command)) return commandMenu();
+  if (command === 'MESES') return generatedCompetenciesMessage();
+  const competencySwitch = normalized.match(/^(?:ESCALA|MES|USAR[-\s]+ESCALA|ATIVAR[-\s]+ESCALA)\s+(.+)$/);
+  if (competencySwitch) return activateCompetencyFromGroup(competencySwitch[1], member);
+  if (command === 'CONFIRMAR-GERAR-PROXIMO-MES') return generateNextMonthFromGroup();
   if (command === 'GERAR-PROXIMO-MES' || /^(?:GERAR|CRIAR)\s+(?:(?:A|O)\s+)?(?:LISTA|ESCALA)(?:\s+DO)?\s+PROXIMO\s+MES$/.test(normalized)) {
-    return generateNextMonthFromGroup();
+    return nextMonthGenerationWarning();
   }
   if (command === 'STATUS' || /\bMEU STATUS\b/.test(normalized)) return `*${member.rank} ${member.operational_name}*\nSituação: ${operationalLabel[member.operational_status] ?? member.operational_status}\nAutorização: ${authorizationLabel[member.authorization_status] ?? member.authorization_status}`;
   if (command === 'CRONOGRAMA' || /\b(?:VER|MOSTRAR|MOSTRA|QUERO VER)\s+(?:O\s+)?CRONOGRAMA\b/.test(normalized)) {
@@ -529,18 +609,22 @@ async function executeCommand(member, rawBody, { explicitSlash = false, targetMe
   return explicitSlash ? 'Comando não reconhecido. Envie /menu para ver os comandos disponíveis.' : null;
 }
 
-function activeCompetency() {
+export function activeCompetency() {
+  const currentIndex = dayjs().year() * 12 + dayjs().month() + 1;
   const configuredId = Number(readSetting('bot_active_competency_id'));
+  let configured = null;
   if (Number.isInteger(configuredId) && configuredId > 0) {
-    const configured = db.prepare('SELECT * FROM competencies WHERE id=?').get(configuredId);
-    if (configured) return configured;
+    configured = db.prepare('SELECT * FROM competencies WHERE id=? AND generated_at IS NOT NULL').get(configuredId) ?? null;
+    const configuredIndex = configured ? configured.year * 12 + configured.month : 0;
+    if (configured && configuredIndex >= currentIndex) return configured;
   }
-  const nextMonth = dayjs().add(1, 'month');
-  return db.prepare(`SELECT c.* FROM competencies c JOIN service_slots s ON s.competency_id=c.id
-    WHERE c.year=? AND c.month=? GROUP BY c.id LIMIT 1`).get(nextMonth.year(), nextMonth.month() + 1)
-    ?? db.prepare(`SELECT c.* FROM competencies c JOIN service_slots s ON s.competency_id=c.id
-      WHERE s.service_date>=? GROUP BY c.id ORDER BY c.year,c.month LIMIT 1`).get(dayjs().format('YYYY-MM-DD'))
-    ?? null;
+  const automatic = db.prepare(`SELECT * FROM competencies WHERE generated_at IS NOT NULL
+    AND (year * 12 + month)>=? ORDER BY year,month LIMIT 1`).get(currentIndex) ?? null;
+  if (automatic) {
+    if (automatic.id !== configuredId) writeSetting('bot_active_competency_id', String(automatic.id), null);
+    return automatic;
+  }
+  return configured ?? db.prepare(`SELECT * FROM competencies WHERE generated_at IS NOT NULL ORDER BY year DESC,month DESC LIMIT 1`).get() ?? null;
 }
 
 function currentMarkingTurn() {

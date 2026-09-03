@@ -40,7 +40,7 @@ CREATE TABLE IF NOT EXISTS seniority_versions (
 CREATE TABLE IF NOT EXISTS competencies (
  id INTEGER PRIMARY KEY AUTOINCREMENT, year INTEGER NOT NULL, month INTEGER NOT NULL, name TEXT NOT NULL,
  status TEXT NOT NULL DEFAULT 'CONFIGURING', standard_hour_limit INTEGER NOT NULL DEFAULT 192,
- current_hour_limit INTEGER NOT NULL DEFAULT 192, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+ current_hour_limit INTEGER NOT NULL DEFAULT 192, generated_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
  UNIQUE(year, month)
 );
 CREATE TABLE IF NOT EXISTS service_slots (

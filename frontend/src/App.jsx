@@ -15,7 +15,7 @@ const links = [
   ['/dashboard', 'Visão geral', 'overview'],
   ['/efetivo', 'Efetivo', 'members'],
   ['/antiguidade', 'Antiguidade', 'seniority'],
-  ['/horarios', 'Horários', 'calendar'],
+  ['/horarios', 'Gestão do mês', 'calendar'],
   ['/gerenciar-escala', 'Gerenciar escala', 'schedule'],
   ['/whatsapp', 'WhatsApp', 'whatsapp'],
   ['/configuracoes', 'Configurações', 'settings']

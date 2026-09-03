@@ -4,11 +4,25 @@ import { z } from 'zod';
 import { db, audit, now } from '../../database/index.js';
 import { allow } from '../../middlewares/auth.js';
 import { isMajoradoDate } from '../../scheduling/majorado.js';
-import { generateNextMonthSchedule, generateOrdinaryAssignments } from '../../scheduling/monthly.js';
+import { generateNextMonthSchedule, generateOrdinaryAssignments, regenerateOrdinaryAssignments } from '../../scheduling/monthly.js';
 
 const router = Router();
 const monthNames = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
 const slotsCountSql = `SELECT c.*,COUNT(s.id) AS slots_count FROM competencies c LEFT JOIN service_slots s ON s.competency_id=c.id GROUP BY c.id`;
+
+const generationDetails = (generation) => ({
+  competencyCreated: Boolean(generation.competencyCreated),
+  anchors: generation.anchors,
+  dutyDays: generation.dutyDays,
+  assignmentsCreated: generation.assignmentsCreated,
+  assignmentsReclassified: generation.assignmentsReclassified,
+  assignmentsRemoved: generation.assignmentsRemoved || 0,
+  ordinaryDutyDays: generation.ordinaryDutyDays,
+  ordinaryShifts: generation.ordinaryShifts,
+  skippedMembers: generation.skippedMembers,
+  unavailableDays: generation.unavailableDays,
+  conflictDays: generation.conflictDays
+});
 
 function prepareMonth(competency) {
   const stamp = now();
@@ -35,19 +49,39 @@ router.post('/generate-next', allow('ADMIN', 'SCHEDULER'), (req, res, next) => {
     const item = db.prepare(`${slotsCountSql} HAVING c.id=?`).get(generation.competency.id);
     res.status(generation.competencyCreated ? 201 : 200).json({
       item: { ...item, slots_count: Number(item.slots_count) },
-      generation: {
-        competencyCreated: generation.competencyCreated,
-        anchors: generation.anchors,
-        dutyDays: generation.dutyDays,
-        assignmentsCreated: generation.assignmentsCreated,
-        assignmentsReclassified: generation.assignmentsReclassified,
-        ordinaryDutyDays: generation.ordinaryDutyDays,
-        ordinaryShifts: generation.ordinaryShifts,
-        skippedMembers: generation.skippedMembers,
-        unavailableDays: generation.unavailableDays,
-        conflictDays: generation.conflictDays
-      }
+      generation: generationDetails(generation)
     });
+  } catch (error) { next(error); }
+});
+router.get('/:id/regeneration-impact', allow('ADMIN', 'SCHEDULER'), (req, res, next) => {
+  try {
+    const competencyId = z.coerce.number().int().positive().parse(req.params.id);
+    const competency = db.prepare('SELECT id,name FROM competencies WHERE id=? AND generated_at IS NOT NULL').get(competencyId);
+    if (!competency) return res.status(404).json({ message: 'Mês gerado não encontrado.' });
+    const impact = db.prepare(`SELECT
+        COUNT(CASE WHEN a.service_type='ORDINARY' THEN 1 END) AS ordinary_assignments,
+        COUNT(DISTINCT CASE WHEN a.service_type='ORDINARY' THEN s.service_date || ':' || a.member_id END) AS ordinary_duty_days,
+        COUNT(CASE WHEN a.service_type='EXTRAORDINARY' THEN 1 END) AS extraordinary_assignments
+      FROM service_slots s LEFT JOIN assignments a ON a.service_slot_id=s.id AND a.status='CONFIRMED'
+      WHERE s.competency_id=?`).get(competencyId);
+    res.json({ item: {
+      competency,
+      ordinaryAssignments: Number(impact.ordinary_assignments || 0),
+      ordinaryDutyDays: Number(impact.ordinary_duty_days || 0),
+      extraordinaryAssignments: Number(impact.extraordinary_assignments || 0)
+    } });
+  } catch (error) { next(error); }
+});
+router.post('/:id/regenerate', allow('ADMIN', 'SCHEDULER'), (req, res, next) => {
+  try {
+    const competencyId = z.coerce.number().int().positive().parse(req.params.id);
+    z.object({ confirmOrdinaryReset: z.literal(true) }).parse(req.body);
+    const competency = db.prepare('SELECT * FROM competencies WHERE id=? AND generated_at IS NOT NULL').get(competencyId);
+    if (!competency) return res.status(404).json({ message: 'Mês gerado não encontrado.' });
+    prepareMonth(competency);
+    const generation = regenerateOrdinaryAssignments({ competencyId, userId: req.user.id, reason: 'Regeneração manual pelo painel' });
+    const item = db.prepare(`${slotsCountSql} HAVING c.id=?`).get(competencyId);
+    res.json({ item: { ...item, slots_count: Number(item.slots_count) }, generation: generationDetails(generation) });
   } catch (error) { next(error); }
 });
 router.get('/:id', (req, res) => { const item = db.prepare(`${slotsCountSql} HAVING c.id=?`).get(req.params.id); return item ? res.json({ item }) : res.status(404).json({ message: 'Mês não encontrado.' }); });
