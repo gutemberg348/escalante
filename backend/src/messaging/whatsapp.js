@@ -240,7 +240,13 @@ function jidAccount(jid) {
 }
 
 function botAccounts(socket) {
-  return new Set([socket.user?.id, socket.user?.lid].map(jidAccount).filter(Boolean));
+  const accounts = [
+    socket.user?.id,
+    socket.user?.lid,
+    connection.phoneNumber,
+    readSetting('whatsapp_target_number')
+  ].map(jidAccount).filter(Boolean);
+  return new Set(accounts.flatMap((account) => phoneVariants(account)));
 }
 
 function mentionsBot(socket, message) {
@@ -303,7 +309,27 @@ function hasNonBotMention(socket, message) {
   return Boolean(messageContextInfo(message)?.mentionedJid?.some((jid) => !botIds.has(jidAccount(jid))));
 }
 
-async function mentionedMember(socket, message) {
+function normalizeMentionLabel(value) {
+  return String(value ?? '').toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').trim();
+}
+
+export function memberMentionedByName(body, excludedMemberId = null) {
+  const normalizedBody = normalizeMentionLabel(body);
+  const members = db.prepare('SELECT * FROM members').all();
+  const matches = members.filter((member) => {
+    if (member.id === excludedMemberId) return false;
+    const labels = [member.full_name, member.operational_name, `${member.rank} ${member.operational_name}`]
+      .map(normalizeMentionLabel)
+      .filter((label) => label.length >= 3);
+    return labels.some((label) => {
+      const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      return new RegExp(`@${escaped}(?=\\s|[,.;:]|$)`).test(normalizedBody);
+    });
+  });
+  return matches.length === 1 ? matches[0] : null;
+}
+
+async function mentionedMember(socket, message, excludedMemberId = null) {
   const mentioned = messageContextInfo(message)?.mentionedJid ?? [];
   const botIds = botAccounts(socket);
   const findByJid = db.prepare('SELECT * FROM members WHERE whatsapp_jid=?');
@@ -311,14 +337,14 @@ async function mentionedMember(socket, message) {
   for (const jid of mentioned) {
     if (botIds.has(jidAccount(jid))) continue;
     const member = findByJid.get(jid) ?? findByIdentity.get(jid);
-    if (member) return member;
+    if (member && member.id !== excludedMemberId) return member;
     const resolved = await resolveMemberIdentityWithMapping(socket, {
       participant: jid,
       remoteJid: message.key.remoteJid
     });
-    if (resolved.member) return resolved.member;
+    if (resolved.member && resolved.member.id !== excludedMemberId) return resolved.member;
   }
-  return null;
+  return memberMentionedByName(textFromMessage(message), excludedMemberId);
 }
 
 function logOutboundMessage(socket, result, remoteJid, body) {
@@ -346,7 +372,7 @@ async function handleIncomingMessages(socket, { messages }) {
     const identity = quotedRequest
       ? await resolveMemberIdentityWithMapping(socket, quotedRequest.key)
       : (originalIdentity.member ? originalIdentity : await resolveMemberIdentityWithMapping(socket, message.key));
-    const targetMember = quotedRequest ? identity.member : await mentionedMember(socket, message);
+    const targetMember = quotedRequest ? identity.member : await mentionedMember(socket, message, identity.member?.id ?? null);
     const unresolvedTargetMention = !quotedRequest && hasNonBotMention(socket, message) && !targetMember;
     const senderJid = identity.senderJid;
     if (!senderJid) continue;
