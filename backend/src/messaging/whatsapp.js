@@ -329,6 +329,20 @@ export function memberMentionedByName(body, excludedMemberId = null) {
   return matches.length === 1 ? matches[0] : null;
 }
 
+function membersMentionedByTextAccount(socket, body, excludedMemberId = null) {
+  const botIds = botAccounts(socket);
+  const accounts = [...new Set([...String(body ?? '').matchAll(/@(\d{10,20})/g)].map((match) => match[1]))]
+    .filter((account) => !botIds.has(account));
+  const matches = new Map();
+  for (const account of accounts) {
+    for (const suffix of ['@s.whatsapp.net', '@lid']) {
+      const member = resolveMemberIdentity({ participant: `${account}${suffix}` }).member;
+      if (member && member.id !== excludedMemberId) matches.set(member.id, member);
+    }
+  }
+  return [...matches.values()];
+}
+
 async function mentionedMember(socket, message, excludedMemberId = null) {
   const mentioned = messageContextInfo(message)?.mentionedJid ?? [];
   const botIds = botAccounts(socket);
@@ -344,8 +358,13 @@ async function mentionedMember(socket, message, excludedMemberId = null) {
     });
     if (resolved.member && resolved.member.id !== excludedMemberId) return resolved.member;
   }
+  const textMatches = membersMentionedByTextAccount(socket, textFromMessage(message), excludedMemberId);
+  if (textMatches.length === 1) return textMatches[0];
   return memberMentionedByName(textFromMessage(message), excludedMemberId);
 }
+
+const delegatedMarkingPattern = /\b(?:COLOCA|COLOCAR|COLOQUE|POE|POR|PONHA|BOTA|BOTAR|BOTE|MARCA|MARCAR|MARQUE|ESCALA|ESCALAR|INCLUA|ADICIONA|ADICIONAR)\b/;
+const isDelegatedMarkingText = (body) => delegatedMarkingPattern.test(normalizeMentionLabel(body));
 
 function logOutboundMessage(socket, result, remoteJid, body) {
   db.prepare(`INSERT OR IGNORE INTO whatsapp_messages
@@ -373,7 +392,19 @@ async function handleIncomingMessages(socket, { messages }) {
       ? await resolveMemberIdentityWithMapping(socket, quotedRequest.key)
       : (originalIdentity.member ? originalIdentity : await resolveMemberIdentityWithMapping(socket, message.key));
     const targetMember = quotedRequest ? identity.member : await mentionedMember(socket, message, identity.member?.id ?? null);
-    const unresolvedTargetMention = !quotedRequest && hasNonBotMention(socket, message) && !targetMember;
+    const mentionTokens = effectiveBody.match(/@\S+/g) ?? [];
+    const delegatedMention = !quotedRequest && isDelegatedMarkingText(commandText)
+      && (hasNonBotMention(socket, message) || mentionTokens.length >= 2);
+    const unresolvedTargetMention = delegatedMention && !targetMember;
+    if (delegatedMention) {
+      console.info('Resolução de marcação por menção', {
+        messageId,
+        senderMemberId: identity.member?.id ?? null,
+        targetMemberId: targetMember?.id ?? null,
+        structuredMentions: messageContextInfo(message)?.mentionedJid?.length ?? 0,
+        textMentions: mentionTokens.length
+      });
+    }
     const senderJid = identity.senderJid;
     if (!senderJid) continue;
     const processedMessageId = messageId;
@@ -618,7 +649,7 @@ async function executeCommand(member, rawBody, { explicitSlash = false, targetMe
   const [command, argument] = normalized.split(/\s+/, 2);
   if (['MENU', 'AJUDA', 'COMANDOS'].includes(command)) return commandMenu();
   if (command === 'MESES') return generatedCompetenciesMessage();
-  const delegatedAction = /\b(?:COLOCA|COLOCAR|COLOQUE|POE|POR|PONHA|BOTA|BOTAR|BOTE|MARCA|MARCAR|MARQUE|ESCALA|ESCALAR|INCLUA|ADICIONA|ADICIONAR)\b/.test(normalized);
+  const delegatedAction = isDelegatedMarkingText(normalized);
   if (targetMember && targetMember.id !== member.id && delegatedAction) {
     const choices = parseNaturalChoices(normalized);
     if (!choices.length) return `Informe o dia e o turno de *${targetMember.rank} ${targetMember.operational_name}*. Exemplo: *coloque @militar dia 12 à noite* ou *dia 12, 24 horas*.`;
