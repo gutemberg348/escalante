@@ -3,10 +3,9 @@ node_modules/
 dist/
 .env
 
-# A imagem inicial da escala é enviada para a VPS. Nunca envie os arquivos
-# temporários do SQLite, a sessão do WhatsApp, prévias ou backups.
+# Dados locais e da VPS não são distribuídos pelo Git.
+# Preserve o banco e a sessão do WhatsApp ao atualizar o código.
 data/*
-!data/escala.sqlite
 data/*.sqlite-shm
 data/*.sqlite-wal
 data/whatsapp-auth/
