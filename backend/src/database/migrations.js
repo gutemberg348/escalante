@@ -231,6 +231,31 @@ const migrations = [
           WHERE s.competency_id=competencies.id AND a.status='CONFIRMED'
         )`).run();
     }
+  },
+  {
+    version: '014_one_member_per_shift',
+    apply() {
+      // Mantém a marcação ordinária (quando houver) ou a mais antiga e
+      // remove apenas repetições do mesmo militar dentro do mesmo turno.
+      db.exec(`DELETE FROM assignments
+        WHERE status='CONFIRMED' AND EXISTS (
+          SELECT 1 FROM assignments preferred
+          WHERE preferred.service_slot_id=assignments.service_slot_id
+            AND preferred.member_id=assignments.member_id
+            AND preferred.status='CONFIRMED'
+            AND (
+              CASE preferred.service_type WHEN 'ORDINARY' THEN 0 ELSE 1 END
+                < CASE assignments.service_type WHEN 'ORDINARY' THEN 0 ELSE 1 END
+              OR (
+                preferred.service_type=assignments.service_type
+                AND preferred.id<assignments.id
+              )
+            )
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_assignments_one_member_per_confirmed_shift
+          ON assignments(service_slot_id,member_id)
+          WHERE status='CONFIRMED';`);
+    }
   }
 ];
 

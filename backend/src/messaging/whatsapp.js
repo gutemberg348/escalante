@@ -298,7 +298,12 @@ function withoutBotMention(body) {
   return body.replace(/@\S+/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
-function mentionedMember(socket, message) {
+function hasNonBotMention(socket, message) {
+  const botIds = botAccounts(socket);
+  return Boolean(messageContextInfo(message)?.mentionedJid?.some((jid) => !botIds.has(jidAccount(jid))));
+}
+
+async function mentionedMember(socket, message) {
   const mentioned = messageContextInfo(message)?.mentionedJid ?? [];
   const botIds = botAccounts(socket);
   const findByJid = db.prepare('SELECT * FROM members WHERE whatsapp_jid=?');
@@ -307,6 +312,11 @@ function mentionedMember(socket, message) {
     if (botIds.has(jidAccount(jid))) continue;
     const member = findByJid.get(jid) ?? findByIdentity.get(jid);
     if (member) return member;
+    const resolved = await resolveMemberIdentityWithMapping(socket, {
+      participant: jid,
+      remoteJid: message.key.remoteJid
+    });
+    if (resolved.member) return resolved.member;
   }
   return null;
 }
@@ -336,7 +346,8 @@ async function handleIncomingMessages(socket, { messages }) {
     const identity = quotedRequest
       ? await resolveMemberIdentityWithMapping(socket, quotedRequest.key)
       : (originalIdentity.member ? originalIdentity : await resolveMemberIdentityWithMapping(socket, message.key));
-    const targetMember = quotedRequest ? identity.member : mentionedMember(socket, message);
+    const targetMember = quotedRequest ? identity.member : await mentionedMember(socket, message);
+    const unresolvedTargetMention = !quotedRequest && hasNonBotMention(socket, message) && !targetMember;
     const senderJid = identity.senderJid;
     if (!senderJid) continue;
     const processedMessageId = messageId;
@@ -345,7 +356,9 @@ async function handleIncomingMessages(socket, { messages }) {
     db.prepare('INSERT OR IGNORE INTO whatsapp_messages (message_id,remote_jid,sender_jid,direction,body,created_at) VALUES (?,?,?,?,?,?)')
       .run(processedMessageId, remoteJid, senderJid, 'INBOUND', effectiveBody.slice(0, 2000), now());
     const reply = identity.member
-      ? await executeCommand(identity.member, commandText, { explicitSlash, targetMember })
+      ? unresolvedTargetMention
+        ? 'O militar marcado não está vinculado a um cadastro do efetivo.'
+        : await executeCommand(identity.member, commandText, { explicitSlash, targetMember })
       : quotedRequest
         ? 'O autor da mensagem citada não está cadastrado no efetivo.'
         : 'Seu telefone não está cadastrado no efetivo. Peça ao escalante para preencher seu número no painel.';
@@ -477,7 +490,7 @@ export async function discoverMemberWhatsAppJid(memberId) {
 function commandMenu() {
   return `*ESCALA - COMO USAR*
 
-O bot responde de quatro formas:
+O bot responde de cinco formas:
 
 1. Com atalho: */vagas*
 2. Marcando o bot: *quero ver as vagas*
@@ -485,6 +498,9 @@ O bot responde de quatro formas:
    *04; 05 noite*
 4. Respondendo à mensagem de outro participante e marcando o bot.
    O pedido citado será executado para o autor original.
+5. Marcando o bot e o militar que receberá a vaga:
+   *@Escalante coloque @militar dia 12 à noite*
+   *@Escalante marque @militar dia 12, 24 horas*
 
 Quando informar somente o dia, o sistema marca dia e noite (24 horas).
 
@@ -576,6 +592,16 @@ async function executeCommand(member, rawBody, { explicitSlash = false, targetMe
   const [command, argument] = normalized.split(/\s+/, 2);
   if (['MENU', 'AJUDA', 'COMANDOS'].includes(command)) return commandMenu();
   if (command === 'MESES') return generatedCompetenciesMessage();
+  const delegatedAction = /\b(?:COLOCA|COLOCAR|COLOQUE|POE|POR|PONHA|BOTA|BOTAR|BOTE|MARCA|MARCAR|MARQUE|ESCALA|ESCALAR|INCLUA|ADICIONA|ADICIONAR)\b/.test(normalized);
+  if (targetMember && targetMember.id !== member.id && delegatedAction) {
+    const choices = parseNaturalChoices(normalized);
+    if (!choices.length) return `Informe o dia e o turno de *${targetMember.rank} ${targetMember.operational_name}*. Exemplo: *coloque @militar dia 12 à noite* ou *dia 12, 24 horas*.`;
+    const result = await assignNaturalChoices(targetMember, choices);
+    const heading = `*MARCAÇÃO PARA ${targetMember.rank.toUpperCase()} ${targetMember.operational_name.toUpperCase()}*`;
+    return result?.type === 'TEXT'
+      ? { ...result, text: `${heading}\n\n${result.text}` }
+      : `${heading}\n\n${result}`;
+  }
   const competencySwitch = normalized.match(/^(?:ESCALA|MES|USAR[-\s]+ESCALA|ATIVAR[-\s]+ESCALA)\s+(.+)$/);
   if (competencySwitch) return activateCompetencyFromGroup(competencySwitch[1], member);
   if (command === 'CONFIRMAR-GERAR-PROXIMO-MES') return generateNextMonthFromGroup();
@@ -867,21 +893,22 @@ async function vacanciesWithPdf(member) {
 export function parseNaturalChoices(body) {
   const choicesByDay = new Map();
   const normalized = body.toUpperCase().replace(/\s+/g, ' ');
-  const periodPattern = 'DIA(?:\\s+E)?\\s+NOITE|DIURNO(?:\\s+E)?\\s+NOTURNO|24\\s*HORAS?|DIA|DIURNO|NOITE|NOTURNO';
+  const fullDayPattern = '24\\s*(?:H|HRS?|HORAS?|HRAS?)';
+  const periodPattern = `DIA(?:\\s+E)?\\s+NOITE|DIURNO(?:\\s+E)?\\s+NOTURNO|${fullDayPattern}|DIA|DIURNO|NOITE|NOTURNO`;
   const addChoice = (rawDay, periodText) => {
     const day = Number(rawDay);
     if (!Number.isInteger(day) || day < 1 || day > 31) return;
     const periods = choicesByDay.get(day) ?? new Set();
     if (/DIA|DIURNO/.test(periodText)) periods.add('DIURNO');
     if (/NOITE|NOTURNO/.test(periodText)) periods.add('NOTURNO');
-    if (/24\s*HORAS?/.test(periodText)) { periods.add('DIURNO'); periods.add('NOTURNO'); }
+    if (/24\s*(?:H|HRS?|HORAS?|HRAS?)/.test(periodText)) { periods.add('DIURNO'); periods.add('NOTURNO'); }
     choicesByDay.set(day, periods);
   };
   const groupedDays = new RegExp(`\\b((?:0?\\d{1,2}\\s*(?:,|E)\\s*)+0?\\d{1,2})\\s*,?\\s*(${periodPattern})\\b`, 'g');
   for (const match of normalized.matchAll(groupedDays)) for (const day of match[1].match(/\d{1,2}/g) || []) addChoice(day, match[2]);
   const daysBeforeComma = new RegExp(`\\b((?:0?\\d{1,2}\\s+)+0?\\d{1,2})\\s*,\\s*(${periodPattern})\\b`, 'g');
   for (const match of normalized.matchAll(daysBeforeComma)) for (const day of match[1].match(/\d{1,2}/g) || []) addChoice(day, match[2]);
-  for (const match of normalized.matchAll(/\b0?(\d{1,2})\s+24\s*HORAS?\b/g)) addChoice(match[1], '24 HORAS');
+  for (const match of normalized.matchAll(/\b0?(\d{1,2})\s+24\s*(?:H|HRS?|HORAS?|HRAS?)\b/g)) addChoice(match[1], '24 HORAS');
   const onlyHours = normalized.match(/^\s*0?(\d{1,2})\s+HORAS?\s*$/);
   if (onlyHours) addChoice(onlyHours[1], '24 HORAS');
   const sharedPeriod = new RegExp(`\\b0?(\\d{1,2})\\s+E\\s+0?(\\d{1,2})\\s+(${periodPattern})\\b`, 'g');
@@ -898,7 +925,7 @@ export function parseNaturalChoices(body) {
   }
   for (const match of normalized.matchAll(/\b0?(\d{1,2})(?=\s*(?:;|,|\bE\b))/g)) {
     const afterDay = normalized.slice((match.index ?? 0) + match[0].length).trimStart();
-    if (!/^(?:DIA|DIURNO|NOITE|NOTURNO|24\s*HORAS?)/.test(afterDay)) addChoice(match[1], '24 HORAS');
+    if (!/^(?:DIA|DIURNO|NOITE|NOTURNO|24\s*(?:H|HRS?|HORAS?|HRAS?))/.test(afterDay)) addChoice(match[1], '24 HORAS');
   }
   const finalBareDay = normalized.match(/(?:^|\s)(?:DIA\s+)?0?(\d{1,2})\s*[.!]?\s*$/);
   if (finalBareDay) addChoice(finalBareDay[1], '24 HORAS');
