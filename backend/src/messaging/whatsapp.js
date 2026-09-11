@@ -5,8 +5,11 @@ import QRCode from 'qrcode';
 import { env } from '../config/env.js';
 import { audit, db, now } from '../database/index.js';
 import { buildSchedulePdf } from './schedule-pdf.js';
+import { parseMarkingRequest } from './marking-choices.js';
+export { parseNaturalChoices } from './marking-choices.js';
 
 const authDirectory = path.resolve(path.dirname(env.DATABASE_PATH), 'whatsapp-auth');
+const commandHandlerVersion = 'mentions-v2';
 const connection = {
   socket: null, saveCreds: null, status: 'DISCONNECTED', qrDataUrl: null, qrIssued: false,
   phoneNumber: null, error: null, reconnectTimer: null, reconnectAttempts: 0,
@@ -165,6 +168,7 @@ async function handleConnectionUpdate(socket, { connection: stateName, qr, lastD
     connection.phoneNumber = socket.user?.id?.split(':')[0]?.split('@')[0] ?? null;
     connection.reconnectAttempts = 0; connection.lastConnectedAt = now(); connection.lastDisconnectCode = null;
     writeSetting('whatsapp_auto_connect', '1', null);
+    console.info(JSON.stringify({ event: 'whatsapp_ready', handlerVersion: commandHandlerVersion, pid: process.pid }));
   }
   if (stateName === 'close') {
     const qrWasIssued = connection.qrIssued;
@@ -324,38 +328,58 @@ export function memberMentionedByName(body, excludedMemberId = null) {
   return matches.length === 1 ? matches[0] : null;
 }
 
-function membersMentionedByTextAccount(socket, body, excludedMemberId = null) {
+async function mentionedMember(socket, message) {
   const botIds = botAccounts(socket);
-  const accounts = [...new Set([...String(body ?? '').matchAll(/@(\d{10,20})/g)].map((match) => match[1]))]
-    .filter((account) => !botIds.has(account));
+  const mentioned = [...new Set(messageContextInfo(message)?.mentionedJid ?? [])]
+    .filter((jid) => !botIds.has(jidAccount(jid)));
   const matches = new Map();
-  for (const account of accounts) {
-    for (const suffix of ['@s.whatsapp.net', '@lid']) {
-      const member = resolveMemberIdentity({ participant: `${account}${suffix}` }).member;
-      if (member && member.id !== excludedMemberId) matches.set(member.id, member);
-    }
-  }
-  return [...matches.values()];
-}
-
-async function mentionedMember(socket, message, excludedMemberId = null) {
-  const mentioned = messageContextInfo(message)?.mentionedJid ?? [];
-  const botIds = botAccounts(socket);
-  const findByJid = db.prepare('SELECT * FROM members WHERE whatsapp_jid=?');
-  const findByIdentity = db.prepare(`SELECT m.* FROM member_whatsapp_identities i JOIN members m ON m.id=i.member_id WHERE i.jid=?`);
+  let unresolved = false;
   for (const jid of mentioned) {
-    if (botIds.has(jidAccount(jid))) continue;
-    const member = findByJid.get(jid) ?? findByIdentity.get(jid);
-    if (member && member.id !== excludedMemberId) return member;
     const resolved = await resolveMemberIdentityWithMapping(socket, {
       participant: jid,
       remoteJid: message.key.remoteJid
     });
-    if (resolved.member && resolved.member.id !== excludedMemberId) return resolved.member;
+    if (resolved.member) matches.set(resolved.member.id, resolved.member);
+    else unresolved = true;
   }
-  const textMatches = membersMentionedByTextAccount(socket, textFromMessage(message), excludedMemberId);
-  if (textMatches.length === 1) return textMatches[0];
-  return memberMentionedByName(textFromMessage(message), excludedMemberId);
+  if (mentioned.length) {
+    // Structured mentions identify the actual contact. Never substitute a name
+    // from the text if that contact could not be identified.
+    return {
+      required: true, source: 'MENTION',
+      member: !unresolved && matches.size === 1 ? [...matches.values()][0] : null,
+      error: unresolved ? 'Não identifiquei o contato marcado no efetivo. Nenhuma marcação foi feita.'
+        : matches.size !== 1 ? 'Marque apenas um militar por pedido. Nenhuma marcação foi feita.' : null
+    };
+  }
+  const body = textFromMessage(message);
+  const textAccounts = [...new Set([...body.matchAll(/@(\d{10,20})(?!\d)/g)].map((match) => match[1]))]
+    .filter((account) => !botIds.has(account));
+  // When metadata is missing, numeric tokens can refer to PN or LID. Look up
+  // both without registering guessed identities or changing phone numbers.
+  for (const account of textAccounts) {
+    const candidates = db.prepare(`SELECT DISTINCT m.* FROM members m
+      LEFT JOIN member_whatsapp_identities i ON i.member_id=m.id
+      WHERE m.whatsapp_jid IN (?,?) OR i.jid IN (?,?)`).all(
+      `${account}@s.whatsapp.net`, `${account}@lid`, `${account}@s.whatsapp.net`, `${account}@lid`);
+    for (const phone of phoneVariants(account)) {
+      const candidate = db.prepare('SELECT * FROM members WHERE phone_number=?').get(phone);
+      if (candidate) candidates.push(candidate);
+    }
+    if (!candidates.length) unresolved = true;
+    for (const candidate of candidates) matches.set(candidate.id, candidate);
+  }
+  if (textAccounts.length) return {
+    required: true, source: 'TEXT_ACCOUNT',
+    member: !unresolved && matches.size === 1 ? [...matches.values()][0] : null,
+    error: unresolved || matches.size !== 1 ? 'Não identifiquei um único militar marcado. Nenhuma marcação foi feita.' : null
+  };
+  const textMentions = body.match(/@\S+/g) ?? [];
+  const named = memberMentionedByName(body);
+  const required = textMentions.length >= 2 || Boolean(named)
+    || (withoutBotMention(body).startsWith('/') && textMentions.length > 0);
+  return { required, source: required ? 'TEXT_NAME' : 'SELF', member: named,
+    error: required && !named ? 'Não identifiquei um único militar marcado. Selecione o contato usando @. Nenhuma marcação foi feita.' : null };
 }
 
 const delegatedMarkingPattern = /\b(?:COLOCA|COLOCAR|COLOQUE|POE|POR|PONHA|BOTA|BOTAR|BOTE|MARCA|MARCAR|MARQUE|ESCALA|ESCALAR|INCLUA|ADICIONA|ADICIONAR)\b/;
@@ -367,7 +391,7 @@ function logOutboundMessage(socket, result, remoteJid, body) {
     .run(result?.key?.id ?? `OUT-${Date.now()}`, remoteJid, socket.user?.id ?? null, 'OUTBOUND', String(body ?? '').slice(0, 2000), now());
 }
 
-async function handleIncomingMessages(socket, { messages }) {
+export async function handleIncomingMessages(socket, { messages }) {
   for (const message of messages) {
     if (!message.message || message.key.fromMe || message.key.remoteJid === 'status@broadcast') continue;
     const remoteJid = message.key.remoteJid;
@@ -379,44 +403,37 @@ async function handleIncomingMessages(socket, { messages }) {
     // continuam sem interpretação e sem resposta até alguém chamar o bot.
     const originalIdentity = resolveMemberIdentity(message.key);
     if (!isAddressedToBot(socket, message, body)) continue;
-    const quotedRequest = quotedMemberRequest(socket, message);
+    const directText = withoutBotMention(body);
+    const directSelection = parseMarkingRequest(directText);
+    const directChoices = directSelection.choices;
+    const directTarget = await mentionedMember(socket, message);
+    // A new command takes precedence over a quoted message. Quoting a request
+    // and only calling the bot still delegates to the original author.
+    const hasDirectRequest = directTarget.required || directChoices.length > 0 || Boolean(directSelection.error)
+      || directText.startsWith('/') || isDelegatedMarkingText(directText);
+    const quotedRequest = hasDirectRequest ? null : quotedMemberRequest(socket, message);
     const effectiveBody = quotedRequest?.body ?? body;
     const explicitSlash = effectiveBody.startsWith('/');
     const commandText = withoutBotMention(effectiveBody);
     const identity = quotedRequest
       ? await resolveMemberIdentityWithMapping(socket, quotedRequest.key)
       : (originalIdentity.member ? originalIdentity : await resolveMemberIdentityWithMapping(socket, message.key));
-    const targetMember = quotedRequest ? identity.member : await mentionedMember(socket, message, identity.member?.id ?? null);
-    const mentionTokens = effectiveBody.match(/@\S+/g) ?? [];
-    const requestedChoices = parseNaturalChoices(commandText);
-    // Uma ordem no imperativo ("marque/coloque ... dia 20") nunca pode cair
-    // na marcação do remetente. Para marcar a si próprio continuam válidos
-    // /marcar e a resposta natural contendo apenas os dias/turnos.
-    const delegatedRequest = !quotedRequest && !explicitSlash
-      && isDelegatedMarkingText(commandText) && requestedChoices.length > 0;
-    const unresolvedTargetMention = delegatedRequest && !targetMember;
-    if (delegatedRequest) {
-      console.info('Resolução de marcação por menção', {
-        messageId,
-        senderMemberId: identity.member?.id ?? null,
-        targetMemberId: targetMember?.id ?? null,
-        targetName: targetMember?.operational_name ?? null,
-        structuredMentions: messageContextInfo(message)?.mentionedJid?.length ?? 0,
-        textMentions: mentionTokens.length,
-        requestedChoices
-      });
-    }
+    const targetMember = quotedRequest ? null : directTarget.member;
     const senderJid = identity.senderJid;
     if (!senderJid) continue;
     const processedMessageId = messageId;
     const processed = db.prepare('INSERT OR IGNORE INTO processed_messages (message_id,sender_jid,received_at,processed_at) VALUES (?,?,?,?)').run(processedMessageId, senderJid, now(), now());
     if (!processed.changes) continue;
+    console.info(JSON.stringify({ event: 'whatsapp_command', handlerVersion: commandHandlerVersion, pid: process.pid,
+      messageId, senderMemberId: originalIdentity.member?.id ?? null,
+      targetMemberId: quotedRequest ? identity.member?.id ?? null : targetMember?.id ?? (directTarget.required ? null : identity.member?.id ?? null),
+      source: quotedRequest ? 'QUOTE' : directTarget.source, rejected: Boolean(!quotedRequest && directTarget.error) }));
     db.prepare('INSERT OR IGNORE INTO whatsapp_messages (message_id,remote_jid,sender_jid,direction,body,created_at) VALUES (?,?,?,?,?,?)')
       .run(processedMessageId, remoteJid, senderJid, 'INBOUND', effectiveBody.slice(0, 2000), now());
     const reply = identity.member
-      ? unresolvedTargetMention
-        ? 'O militar marcado não está vinculado a um cadastro do efetivo.'
-        : await executeCommand(identity.member, commandText, { explicitSlash, targetMember })
+      ? !quotedRequest && directTarget.error
+        ? directTarget.error
+        : await executeCommand(identity.member, commandText, { explicitSlash, targetMember, requiresTarget: !quotedRequest && directTarget.required })
       : quotedRequest
         ? 'O autor da mensagem citada não está cadastrado no efetivo.'
         : 'Seu telefone não está cadastrado no efetivo. Peça ao escalante para preencher seu número no painel.';
@@ -562,6 +579,15 @@ O bot responde de cinco formas:
 
 Quando informar somente o dia, o sistema marca dia e noite (24 horas).
 
+Exemplos de dias e turnos:
+*20 dia* ou *20 D* — 07h às 19h.
+*20 noite* ou *20 N* — 19h às 07h.
+*20 24h* — dia e noite.
+*20 e 21 noite* — as duas noites.
+*20 dia; 21 noite* — um turno diferente em cada dia.
+Também aceita vírgula: *dia 20, dia*.
+*12h* sozinho não define o turno: informe dia ou noite.
+
 Outros atalhos:
 */status* - consulta seu cadastro
 */minhas* - suas marcações
@@ -644,15 +670,22 @@ function nextMonthGenerationWarning() {
   return `⚠️ *CONFIRMAR GERAÇÃO DO PRÓXIMO MÊS*\n\nSerá criada a escala de *${monthName} de ${target.year()}* com o ciclo ordinário 1x4.\n\n• O mês atual não será apagado.\n• O novo PDF será publicado nos grupos.\n• O novo mês passará a ser usado pelo comando /escala.\n• A fila de marcação poderá ser iniciada.\n\nPara continuar, envie exatamente:\n*/confirmar-gerar-proximo-mes*\n\nPara desistir, não envie a confirmação.`;
 }
 
-async function executeCommand(member, rawBody, { explicitSlash = false, targetMember = null } = {}) {
+async function executeCommand(member, rawBody, { explicitSlash = false, targetMember = null, requiresTarget = false } = {}) {
+  if (requiresTarget && !targetMember) return 'Não identifiquei o militar marcado. Nenhuma marcação foi feita.';
   const commandBody = rawBody.trim().replace(/^\/+/, '').trim();
   const normalized = commandBody.toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
   const [command, argument] = normalized.split(/\s+/, 2);
   if (['MENU', 'AJUDA', 'COMANDOS'].includes(command)) return commandMenu();
   if (command === 'MESES') return generatedCompetenciesMessage();
+  const parseSelection = (text) => {
+    const competency = activeCompetency();
+    return parseMarkingRequest(text, { month: competency?.month, year: competency?.year });
+  };
   const delegatedAction = isDelegatedMarkingText(normalized);
-  if (targetMember && targetMember.id !== member.id && delegatedAction) {
-    const choices = parseNaturalChoices(normalized);
+  const delegatedSelection = parseSelection(normalized);
+  if (targetMember && (delegatedAction || (requiresTarget && (delegatedSelection.choices.length > 0 || delegatedSelection.error)))) {
+    if (delegatedSelection.error) return delegatedSelection.error;
+    const choices = delegatedSelection.choices;
     if (!choices.length) return `Informe o dia e o turno de *${targetMember.rank} ${targetMember.operational_name}*. Exemplo: *coloque @militar dia 12 à noite* ou *dia 12, 24 horas*.`;
     const result = await assignNaturalChoices(targetMember, choices);
     const heading = `*MARCAÇÃO PARA ${targetMember.rank.toUpperCase()} ${targetMember.operational_name.toUpperCase()}*`;
@@ -682,12 +715,16 @@ async function executeCommand(member, rawBody, { explicitSlash = false, targetMe
   if (cancellation) return cancelMemberAssignment(member, cancellation[1]);
   if (command === 'MARCAR') {
     const selection = normalized.slice('MARCAR'.length).trim();
-    const choices = parseNaturalChoices(selection);
+    const parsed = parseSelection(selection);
+    if (parsed.error) return parsed.error;
+    const choices = parsed.choices;
     if (choices.length) return assignNaturalChoices(member, choices);
     const result = assignMemberToSlot(member, selection);
     return result.startsWith('Marcação confirmada') ? resultWithNextTurn(member, result) : result;
   }
-  const choices = parseNaturalChoices(normalized);
+  const parsed = parseSelection(normalized);
+  if (parsed.error) return parsed.error;
+  const choices = parsed.choices;
   if (choices.length) return assignNaturalChoices(member, choices);
   if (command === 'CANCELAR') return cancelMemberAssignment(member, argument);
   return explicitSlash ? 'Comando não reconhecido. Envie /menu para ver os comandos disponíveis.' : null;
@@ -948,56 +985,6 @@ async function vacanciesWithPdf(member) {
   };
 }
 
-export function parseNaturalChoices(body) {
-  const choicesByDay = new Map();
-  const normalized = body.toUpperCase().replace(/\s+/g, ' ');
-  const fullDayPattern = '24\\s*(?:H|HRS?|HORAS?|HRAS?)';
-  const periodPattern = `DIA(?:\\s+E)?\\s+NOITE|DIURNO(?:\\s+E)?\\s+NOTURNO|${fullDayPattern}|DIA|DIURNO|NOITE|NOTURNO`;
-  const addChoice = (rawDay, periodText) => {
-    const day = Number(rawDay);
-    if (!Number.isInteger(day) || day < 1 || day > 31) return;
-    const periods = choicesByDay.get(day) ?? new Set();
-    if (/DIA|DIURNO/.test(periodText)) periods.add('DIURNO');
-    if (/NOITE|NOTURNO/.test(periodText)) periods.add('NOTURNO');
-    if (/24\s*(?:H|HRS?|HORAS?|HRAS?)/.test(periodText)) { periods.add('DIURNO'); periods.add('NOTURNO'); }
-    choicesByDay.set(day, periods);
-  };
-  const groupedDays = new RegExp(`\\b((?:0?\\d{1,2}\\s*(?:,|E)\\s*)+0?\\d{1,2})\\s*,?\\s*(${periodPattern})\\b`, 'g');
-  for (const match of normalized.matchAll(groupedDays)) for (const day of match[1].match(/\d{1,2}/g) || []) addChoice(day, match[2]);
-  const daysBeforeComma = new RegExp(`\\b((?:0?\\d{1,2}\\s+)+0?\\d{1,2})\\s*,\\s*(${periodPattern})\\b`, 'g');
-  for (const match of normalized.matchAll(daysBeforeComma)) for (const day of match[1].match(/\d{1,2}/g) || []) addChoice(day, match[2]);
-  for (const match of normalized.matchAll(/\b0?(\d{1,2})\s+24\s*(?:H|HRS?|HORAS?|HRAS?)\b/g)) addChoice(match[1], '24 HORAS');
-  const onlyHours = normalized.match(/^\s*0?(\d{1,2})\s+HORAS?\s*$/);
-  if (onlyHours) addChoice(onlyHours[1], '24 HORAS');
-  const sharedPeriod = new RegExp(`\\b0?(\\d{1,2})\\s+E\\s+0?(\\d{1,2})\\s+(${periodPattern})\\b`, 'g');
-  for (const match of normalized.matchAll(sharedPeriod)) {
-    addChoice(match[1], match[3]);
-    addChoice(match[2], match[3]);
-  }
-  // Aceita também a forma natural: "dia 14 a noite" / "14 à noite".
-  const expression = new RegExp(`\\b(?:DIA\\s+)?0?(\\d{1,2})\\s+(?:A\\s+)?(${periodPattern})\\b`, 'g');
-  for (const match of normalized.matchAll(expression)) {
-    const prefix = normalized.slice(0, match.index);
-    if (match[1] === '24' && /\d{1,2}[,\s]+$/.test(prefix)) continue;
-    addChoice(match[1], match[2]);
-  }
-  for (const match of normalized.matchAll(/\b0?(\d{1,2})(?=\s*(?:;|,|\bE\b))/g)) {
-    const afterDay = normalized.slice((match.index ?? 0) + match[0].length).trimStart();
-    if (!/^(?:DIA|DIURNO|NOITE|NOTURNO|24\s*(?:H|HRS?|HORAS?|HRAS?))/.test(afterDay)) addChoice(match[1], '24 HORAS');
-  }
-  const finalBareDay = normalized.match(/(?:^|\s)(?:DIA\s+)?0?(\d{1,2})\s*[.!]?\s*$/);
-  if (finalBareDay) addChoice(finalBareDay[1], '24 HORAS');
-  const lastChoice = [...choicesByDay.entries()].at(-1);
-  if (lastChoice) {
-    const trailingDay = /\bE\s+0?(\d{1,2})(?!\s+(?:DIA|DIURNO|NOITE|NOTURNO))\b/g;
-    for (const match of normalized.matchAll(trailingDay)) {
-      for (const period of lastChoice[1]) addChoice(match[1], period);
-    }
-  }
-  return [...choicesByDay]
-    .sort(([firstDay], [secondDay]) => firstDay - secondDay)
-    .map(([day, periods]) => ({ day, periods: [...periods].sort((first, second) => first === second ? 0 : first === 'DIURNO' ? -1 : 1) }));
-}
 
 async function assignNaturalChoices(member, choices) {
   const competency = activeCompetency();
