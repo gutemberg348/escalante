@@ -304,11 +304,6 @@ function withoutBotMention(body) {
   return body.replace(/@\S+/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
-function hasNonBotMention(socket, message) {
-  const botIds = botAccounts(socket);
-  return Boolean(messageContextInfo(message)?.mentionedJid?.some((jid) => !botIds.has(jidAccount(jid))));
-}
-
 function normalizeMentionLabel(value) {
   return String(value ?? '').toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').trim();
 }
@@ -393,16 +388,22 @@ async function handleIncomingMessages(socket, { messages }) {
       : (originalIdentity.member ? originalIdentity : await resolveMemberIdentityWithMapping(socket, message.key));
     const targetMember = quotedRequest ? identity.member : await mentionedMember(socket, message, identity.member?.id ?? null);
     const mentionTokens = effectiveBody.match(/@\S+/g) ?? [];
-    const delegatedMention = !quotedRequest && isDelegatedMarkingText(commandText)
-      && (hasNonBotMention(socket, message) || mentionTokens.length >= 2);
-    const unresolvedTargetMention = delegatedMention && !targetMember;
-    if (delegatedMention) {
+    const requestedChoices = parseNaturalChoices(commandText);
+    // Uma ordem no imperativo ("marque/coloque ... dia 20") nunca pode cair
+    // na marcação do remetente. Para marcar a si próprio continuam válidos
+    // /marcar e a resposta natural contendo apenas os dias/turnos.
+    const delegatedRequest = !quotedRequest && !explicitSlash
+      && isDelegatedMarkingText(commandText) && requestedChoices.length > 0;
+    const unresolvedTargetMention = delegatedRequest && !targetMember;
+    if (delegatedRequest) {
       console.info('Resolução de marcação por menção', {
         messageId,
         senderMemberId: identity.member?.id ?? null,
         targetMemberId: targetMember?.id ?? null,
+        targetName: targetMember?.operational_name ?? null,
         structuredMentions: messageContextInfo(message)?.mentionedJid?.length ?? 0,
-        textMentions: mentionTokens.length
+        textMentions: mentionTokens.length,
+        requestedChoices
       });
     }
     const senderJid = identity.senderJid;
