@@ -3,9 +3,19 @@ const guidance = 'Não entendi com segurança os dias e turnos. Nenhuma marcaç�
 
 // Parse the whole selection before any assignment is written. Explicit periods
 // belong to the adjacent list of days; semicolons/newlines start a new list.
-export function parseMarkingRequest(body, { month = null, year = null } = {}) {
+export function parseMarkingRequest(body, { month = null, year = null, today = null } = {}) {
+  const currentDate = typeof today === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(today)
+    ? new Date(`${today}T12:00:00`)
+    : today instanceof Date ? today : new Date();
+  const relativeDate = (offset) => {
+    const date = new Date(currentDate.getFullYear(), currentDate.getMonth(), currentDate.getDate() + offset, 12);
+    return `${String(date.getDate()).padStart(2, '0')}/${String(date.getMonth() + 1).padStart(2, '0')}/${date.getFullYear()}`;
+  };
   let text = String(body ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase()
-    .replace(/@\S+/g, ' ').replace(/\r?\n/g, ';').replace(/[–—]/g, '-');
+    .replace(/@\S+/g, ' ').replace(/\r?\n/g, ';').replace(/[–—]/g, '-')
+    .replace(/["'“”‘’]/g, ' ').replace(/\?+\s*$/, ' ')
+    .replace(/\b(?:NO\s+DIA\s+DE\s+|DIA\s+DE\s+)?HOJE\b/g, relativeDate(0))
+    .replace(/\bAMANHA\b/g, relativeDate(1));
   const hasNumber = /\d/.test(text);
   const invalid = (message = guidance) => ({ choices: [], error: message });
   if (hasNumber && /\?|\b(?:OU|TALVEZ|NAO|EXCETO|MENOS|CANCELA\w*|RETIRA\w*|REMOVE\w*)\b/.test(text)) return invalid();
@@ -17,6 +27,9 @@ export function parseMarkingRequest(body, { month = null, year = null } = {}) {
     .replace(/\b(?:24\s*(?:HORAS?|HRAS?|HRS?|H)|VINTE E QUATRO HORAS?)\b/g, ' SHIFT_BOTH ')
     .replace(/\b(?:DIA(?:\s+E|\s*\/)?\s*NOITE|NOITE\s+E\s+DIA|DIURNO\s+E\s+NOTURNO|AMBOS(?:\s+OS)?\s+TURNOS|DIA\s+(?:INTEIRO|TODO)|INTEGRAL)\b/g, ' SHIFT_BOTH ')
     .replace(/\b12\s*(?:HORAS?|HRS?|H)\b/g, ' DURATION_TWELVE ')
+    // Com uma duração explícita, "dia" é o turno, não o prefixo da data.
+    // Ex.: 12h "dia" hoje -> somente DIURNO na data atual.
+    .replace(/\b(DURATION_TWELVE)\s+DIA\s+(?=\d)/g, '$1 SHIFT_DAY ')
     .replace(/\b(?:DIAS?|DATA)\s*(?=\d)/g, ' ')
     .replace(/\b(?:NOITE|NOTURNO|NOTURNA)\b/g, ' SHIFT_NIGHT ')
     .replace(/\b(?:DIA|DIURNO|DIURNA)\b/g, ' SHIFT_DAY ');

@@ -587,6 +587,7 @@ Exemplos de dias e turnos:
 *20 dia; 21 noite* — um turno diferente em cada dia.
 Também aceita vírgula: *dia 20, dia*.
 *12h* sozinho não define o turno: informe dia ou noite.
+Também entende a data atual: *12h dia hoje* ou *hoje à noite*.
 
 Outros atalhos:
 */status* - consulta seu cadastro
@@ -679,7 +680,11 @@ async function executeCommand(member, rawBody, { explicitSlash = false, targetMe
   if (command === 'MESES') return generatedCompetenciesMessage();
   const parseSelection = (text) => {
     const competency = activeCompetency();
-    return parseMarkingRequest(text, { month: competency?.month, year: competency?.year });
+    return parseMarkingRequest(text, {
+      month: competency?.month,
+      year: competency?.year,
+      today: dayjs().format('YYYY-MM-DD')
+    });
   };
   const delegatedAction = isDelegatedMarkingText(normalized);
   const delegatedSelection = parseSelection(normalized);

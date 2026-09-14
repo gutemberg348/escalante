@@ -42,6 +42,7 @@ let socket;
 beforeEach(() => {
   db.exec('DELETE FROM assignments; DELETE FROM processed_messages; DELETE FROM whatsapp_messages; DELETE FROM member_whatsapp_identities;');
   db.prepare("UPDATE members SET active=1,operational_status='ACTIVE',authorization_status='AUTHORIZED'").run();
+  setting.run('bot_active_competency_id', String(competency.id), stamp);
   replies = [];
   socket = {
     user: { id: bot, lid: '212000000000001@lid' },
@@ -154,6 +155,25 @@ test('an inactive target does not cause booking in sender name', async () => {
 test('a natural self request with only the bot mention remains supported', async () => {
   await receive('@Escalante põe dia 20 noite', [bot]);
   assert.deepEqual(assignedIds(), [1]);
+});
+
+test('a polite 12-hour request using today books only the daytime shift', async () => {
+  const current = new Date();
+  const currentDate = [
+    current.getFullYear(),
+    String(current.getMonth() + 1).padStart(2, '0'),
+    String(current.getDate()).padStart(2, '0')
+  ].join('-');
+  const { competency: currentCompetency } = ensureCompetencySchedule(`${currentDate.slice(0, 7)}-01`);
+  db.prepare('UPDATE competencies SET generated_at=? WHERE id=?').run(stamp, currentCompetency.id);
+  setting.run('bot_active_competency_id', String(currentCompetency.id), stamp);
+
+  await receive('@Sgt Vieira, por gentileza coloque 12h "dia" hoje?', [bot]);
+
+  assert.deepEqual(db.prepare(`SELECT a.member_id,s.service_date,s.period FROM assignments a
+    JOIN service_slots s ON s.id=a.service_slot_id`).all(), [
+    { member_id: 1, service_date: currentDate, period: 'DIURNO' }
+  ]);
 });
 
 for (const [suffix, expectedPeriods] of [
