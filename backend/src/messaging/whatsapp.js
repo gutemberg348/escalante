@@ -9,7 +9,7 @@ import { parseMarkingRequest } from './marking-choices.js';
 export { parseNaturalChoices } from './marking-choices.js';
 
 const authDirectory = path.resolve(path.dirname(env.DATABASE_PATH), 'whatsapp-auth');
-const commandHandlerVersion = 'mentions-v5-ordinary-justification';
+const commandHandlerVersion = 'mentions-v6-direct-ordinary-justification';
 const connection = {
   socket: null, saveCreds: null, status: 'DISCONNECTED', qrDataUrl: null, qrIssued: false,
   phoneNumber: null, error: null, reconnectTimer: null, reconnectAttempts: 0,
@@ -536,8 +536,6 @@ export async function handleIncomingMessages(socket, { messages }) {
     if (!isAddressedToBot(socket, message, body)) continue;
     const directText = withoutBotMention(body);
     const directDecoration = extractDisplayPrefix(directText);
-    const isDirectJustification = /^\/?\s*JUSTIFI(?:CAR|CA|QUE)\b/.test(normalizeMentionLabel(directText));
-    const unsupportedJustificationMarking = Boolean(directDecoration.displayPrefix && !isDirectJustification);
     const directSelection = parseMarkingRequest(directText);
     const directChoices = directSelection.choices;
     const directTarget = await mentionedMember(socket, message);
@@ -578,9 +576,7 @@ export async function handleIncomingMessages(socket, { messages }) {
     db.prepare('INSERT OR IGNORE INTO whatsapp_messages (message_id,remote_jid,sender_jid,direction,body,created_at) VALUES (?,?,?,?,?,?)')
       .run(processedMessageId, remoteJid, senderJid, 'INBOUND', effectiveBody.slice(0, 2000), now());
     const reply = identity.member
-      ? unsupportedJustificationMarking
-        ? 'Uma justificativa não cria marcação. Use */justificar @militar dia e turno (motivo)* para alterar uma escala ordinária já existente. Nada foi criado.'
-      : isAssignmentChangeText(directText)
+      ? isAssignmentChangeText(directText)
         ? await changeExtraAssignment(socket, message, body, directText,
           directTarget.targets?.length ? directTarget.targets : targetMember ? [{ member: targetMember }] : [], identity.member)
       : multiTargetRequest
@@ -751,6 +747,8 @@ Para ajustar somente serviços extras:
 Cada lado da troca deve informar somente um turno. O bot mostra o antes e o depois.
 
 Para justificar uma escala ordinária que já existe:
+   *@Escalante @militar hoje dia (afastado)*
+   *@Escalante @militar dia 17 noite (licença)*
    */justificar @militar hoje dia (afastado)*
    */justificar @militar dia 17 noite (licença)*
 O texto entre parênteses aparece depois do nome. Se a escala ordinária não existir para o militar naquele horário, nada será criado.
@@ -870,6 +868,16 @@ async function executeCommand(member, rawBody, { explicitSlash = false, targetMe
     return justifyOrdinaryAssignments(justifiedMember, parsed.choices, decoratedRequest.displayPrefix, member);
   }
   if (decoratedRequest.displayPrefix) {
+    const isBareOrdinaryJustification = targetMember && requiresTarget
+      && !isDelegatedMarkingText(normalized)
+      && !isDelegatedRemovalText(normalized)
+      && !isAssignmentChangeText(normalized);
+    if (isBareOrdinaryJustification) {
+      const parsed = parseSelection(decoratedRequest.text);
+      if (parsed.error) return parsed.error;
+      if (!parsed.choices.length) return 'Informe o dia e, se desejar, o turno da escala ordinária que será justificada.';
+      return justifyOrdinaryAssignments(targetMember, parsed.choices, decoratedRequest.displayPrefix, member);
+    }
     return 'Uma justificativa não cria marcação. Use */justificar @militar dia e turno (motivo)* para alterar uma escala ordinária já existente. Nada foi criado.';
   }
   const delegatedRemoval = isDelegatedRemovalText(normalized);

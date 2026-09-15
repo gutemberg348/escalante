@@ -189,11 +189,12 @@ test('a polite 12-hour request using today books only the daytime shift', async 
   ]);
 });
 
-test('text in parentheses without justificar never creates a marking', async () => {
+test('direct parenthetical justification never creates a marking when no ordinary assignment exists', async () => {
   await receive('@Escalante @Alex no dia 20, noite (licença)');
 
   assert.deepEqual(assignedIds(), []);
-  assert.match(replies[0].text, /não cria marcação/i);
+  assert.match(replies[0].text, /nenhuma escala ordinária encontrada/i);
+  assert.match(replies[0].text, /Nenhuma vaga foi criada/i);
 });
 
 test('/justificar updates the existing ordinary shifts without creating assignments', async () => {
@@ -208,6 +209,17 @@ test('/justificar updates the existing ordinary shifts without creating assignme
     { display_prefix: 'afastado', service_type: 'ORDINARY', period: 'NOTURNO' }
   ]);
   assert.match(replies[0].text, /Nenhuma vaga foi criada/);
+});
+
+test('bot and military mentions with date, shift and parentheses justify an existing ordinary assignment', async () => {
+  addConfirmedAssignment({ period: 'DIURNO' });
+
+  await receive('@Escalante @Alex no dia 20 dia (LICENÇA)', [bot, alex]);
+
+  assert.deepEqual(db.prepare('SELECT member_id,service_type,display_prefix FROM assignments').all(), [
+    { member_id: 18, service_type: 'ORDINARY', display_prefix: 'LICENÇA' }
+  ]);
+  assert.match(replies[0].text, /incluído depois do nome/i);
 });
 
 test('/marcar with a justification redirects to /justificar without creating a service', async () => {
