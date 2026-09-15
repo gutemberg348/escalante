@@ -303,6 +303,16 @@ test('tirar with only a date removes every extra shift on that date', async () =
   assert.match(replies.at(-1).text, /20 noite: serviço extra retirado/i);
 });
 
+for (const misspelledRemoval of ['retir', 'exclur', 'remov']) {
+  test(`a one-letter removal typo "${misspelledRemoval}" is accepted`, async () => {
+    await receive('@Escalante marque @Alex no dia 20 noite');
+    await receive(`@Escalante ${misspelledRemoval} @Alex do dia 20 noite`);
+
+    assert.deepEqual(assignedIds(), []);
+    assert.match(replies.at(-1).text, /serviço extra retirado/i);
+  });
+}
+
 test('excluir by date never removes an ordinary service', async () => {
   const slot = db.prepare("SELECT id FROM service_slots WHERE competency_id=? AND service_date=? AND period='DIURNO'")
     .get(competency.id, `${futureYear}-09-20`);

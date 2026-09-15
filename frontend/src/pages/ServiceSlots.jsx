@@ -23,7 +23,8 @@ export default function ServiceSlots() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [scope, setScope] = useState('MONTH');
   const [selectedDates, setSelectedDates] = useState([]);
-  const [columns, setColumns] = useState({ third: false, fourth: false });
+  const [targetColumn, setTargetColumn] = useState(3);
+  const [columnAction, setColumnAction] = useState('OPEN');
   const [confirmationDate, setConfirmationDate] = useState(null);
   const [downloadError, setDownloadError] = useState('');
   const [isDownloading, setIsDownloading] = useState(false);
@@ -105,17 +106,25 @@ export default function ServiceSlots() {
   });
   const generated = generateNext.data || regenerate.data;
   const openSettings = () => {
-    const allThird = dates.length > 0 && dates.every((date) => dayColumns[date]?.includes(3));
-    const allFourth = dates.length > 0 && dates.every((date) => dayColumns[date]?.includes(4));
-    setScope('MONTH'); setSelectedDates([]); setColumns({ third: allThird, fourth: allFourth }); setSettingsOpen(true);
+    setScope('MONTH');
+    setSelectedDates([]);
+    setTargetColumn(3);
+    setColumnAction('OPEN');
+    setSettingsOpen(true);
   };
   const applySettings = () => {
     const targets = scope === 'MONTH' ? dates : selectedDates;
     const next = { ...dayColumns };
     targets.forEach((date) => {
-      const fourth = columns.fourth;
-      const third = columns.third || fourth;
-      next[date] = [1, 2, ...(third ? [3] : []), ...(fourth ? [4] : [])];
+      const openColumns = new Set(next[date] || [1, 2]);
+      if (columnAction === 'OPEN') {
+        openColumns.add(targetColumn);
+        if (targetColumn === 4) openColumns.add(3);
+      } else {
+        openColumns.delete(targetColumn);
+        if (targetColumn === 3) openColumns.delete(4);
+      }
+      next[date] = [1, 2, 3, 4].filter((column) => openColumns.has(column));
     });
     setDayColumns(next);
     saveColumns.mutate(dates.map((date) => ({ serviceDate: date, openColumns: next[date] || [1, 2] })));
@@ -153,10 +162,12 @@ export default function ServiceSlots() {
     {settingsOpen && <div className="modal-backdrop" role="presentation"><section className="edit-modal month-settings-modal" role="dialog" aria-modal="true" aria-label="Configurações das colunas">
       <div className="modal-header"><div><span className="eyebrow">COLUNAS DA ESCALA</span><h2>{selectedCompetency?.name}</h2></div><button className="close-button" onClick={() => setSettingsOpen(false)} aria-label="Fechar">×</button></div>
       <p className="modal-copy">A 1ª e a 2ª posições permanecem abertas. Liberar a 3ª ou a 4ª inicia uma nova fila, envia o cronograma e publica as vagas no grupo.</p>
-      <div className="settings-choice"><button type="button" className={scope === 'MONTH' ? 'selected' : 'secondary-button'} onClick={() => setScope('MONTH')}>Mês inteiro</button><button type="button" className={scope === 'DATES' ? 'selected' : 'secondary-button'} onClick={() => { setScope('DATES'); setSelectedDates([]); }}>Dias específicos</button></div>
-      <div className="column-toggles"><label><input type="checkbox" checked={columns.third} onChange={(event) => setColumns((current) => ({ ...current, third: event.target.checked, fourth: event.target.checked ? current.fourth : false }))} /> Liberar 3ª coluna</label><label><input type="checkbox" checked={columns.fourth} onChange={(event) => setColumns((current) => ({ ...current, fourth: event.target.checked, third: event.target.checked || current.third }))} /> Liberar 4ª coluna</label></div>
-      {scope === 'DATES' && <div className="date-picker-grid">{dates.map((date) => <label key={date} className={selectedDates.includes(date) ? 'chosen' : ''}><input type="checkbox" checked={selectedDates.includes(date)} onChange={() => toggleDate(date)} /> {dateLabel(date)}</label>)}</div>}
-      <div className="form-actions"><button type="button" className="secondary-button" onClick={() => setSettingsOpen(false)}>Cancelar</button><button type="button" disabled={saveColumns.isPending || (scope === 'DATES' && !selectedDates.length)} onClick={applySettings}>Salvar e aplicar</button></div>
+      <div className="column-setting-step"><strong>1. Onde alterar?</strong><div className="settings-choice"><button type="button" className={scope === 'MONTH' ? 'selected' : 'secondary-button'} onClick={() => { setScope('MONTH'); setSelectedDates([]); }}>Mês inteiro</button><button type="button" className={scope === 'DATES' ? 'selected' : 'secondary-button'} onClick={() => { setScope('DATES'); setSelectedDates([]); }}>Dias específicos</button></div></div>
+      <div className="column-setting-step"><strong>2. Qual coluna?</strong><div className="settings-choice"><button type="button" className={targetColumn === 3 ? 'selected' : 'secondary-button'} onClick={() => setTargetColumn(3)}>3ª coluna</button><button type="button" className={targetColumn === 4 ? 'selected' : 'secondary-button'} onClick={() => setTargetColumn(4)}>4ª coluna</button></div></div>
+      <div className="column-setting-step"><strong>3. O que fazer?</strong><div className="settings-choice"><button type="button" className={columnAction === 'OPEN' ? 'selected' : 'secondary-button'} onClick={() => setColumnAction('OPEN')}>Abrir coluna</button><button type="button" className={columnAction === 'CLOSE' ? 'selected close-selection' : 'secondary-button'} onClick={() => setColumnAction('CLOSE')}>Fechar coluna</button></div></div>
+      {scope === 'DATES' && <div className="specific-days"><div className="specific-days-heading"><strong>4. Marque somente os dias desejados</strong><span>{selectedDates.length} selecionado(s)</span></div><div className="date-picker-grid">{dates.map((date) => <label key={date} className={selectedDates.includes(date) ? 'chosen' : ''}><input type="checkbox" checked={selectedDates.includes(date)} onChange={() => toggleDate(date)} /> <span>{dateLabel(date)}</span><small>{dayColumns[date]?.includes(targetColumn) ? 'aberta' : 'fechada'}</small></label>)}</div></div>}
+      <div className={`column-action-summary ${columnAction === 'CLOSE' ? 'closing' : ''}`}><strong>{columnAction === 'OPEN' ? 'Abrir' : 'Fechar'} a {targetColumn}ª coluna</strong><span>{scope === 'MONTH' ? `em todos os ${dates.length} dias do mês` : selectedDates.length ? `em ${selectedDates.length} dia(s) selecionado(s)` : 'selecione ao menos um dia acima'}</span>{targetColumn === 4 && columnAction === 'OPEN' && <small>Abrir a 4ª também mantém a 3ª aberta.</small>}{targetColumn === 3 && columnAction === 'CLOSE' && <small>Fechar a 3ª também fecha a 4ª nesses dias.</small>}</div>
+      <div className="form-actions"><button type="button" className="secondary-button" onClick={() => setSettingsOpen(false)}>Cancelar</button><button type="button" disabled={saveColumns.isPending || (scope === 'DATES' && !selectedDates.length)} onClick={applySettings}>{saveColumns.isPending ? 'Aplicando…' : `${columnAction === 'OPEN' ? 'Abrir' : 'Fechar'} ${targetColumn}ª coluna`}</button></div>
       {saveColumns.isError && <p className="error">{saveColumns.error.response?.data?.message || 'Não foi possível atualizar as colunas.'}</p>}
     </section></div>}
 

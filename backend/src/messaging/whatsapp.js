@@ -389,9 +389,48 @@ async function mentionedMember(socket, message) {
 
 const delegatedMarkingPattern = /\b(?:COLOCA|COLOCAR|COLOQUE|POE|POR|PONHA|BOTA|BOTAR|BOTE|MARCA|MARCAR|MARQUE|ESCALA|ESCALAR|INCLUA|ADICIONA|ADICIONAR|CRIA|CRIAR|CRIE)\b/;
 const isDelegatedMarkingText = (body) => delegatedMarkingPattern.test(normalizeMentionLabel(body));
-const delegatedRemovalPattern = /\b(?:RETIRA|RETIRAR|RETIRE|TIRA|TIRAR|TIRE|EXCLUI|EXCLUIR|EXCLUA|EXCLJIR|REMOVE|REMOVER|REMOVA|APAGA|APAGAR|APAGUE)\b/;
-const delegatedRemovalActionPattern = /\b(?:RETIRA|RETIRAR|RETIRE|TIRA|TIRAR|TIRE|EXCLUI|EXCLUIR|EXCLUA|EXCLJIR|REMOVE|REMOVER|REMOVA|APAGA|APAGAR|APAGUE)\b/g;
-const isDelegatedRemovalText = (body) => delegatedRemovalPattern.test(normalizeMentionLabel(body));
+const delegatedRemovalActions = [
+  'RETIRA', 'RETIRAR', 'RETIRE', 'TIRA', 'TIRAR', 'TIRE',
+  'EXCLUI', 'EXCLUIR', 'EXCLUA', 'REMOVE', 'REMOVER', 'REMOVA',
+  'APAGA', 'APAGAR', 'APAGUE'
+];
+
+function differsByAtMostOneCharacter(left, right) {
+  if (Math.abs(left.length - right.length) > 1) return false;
+  let leftIndex = 0;
+  let rightIndex = 0;
+  let differences = 0;
+  while (leftIndex < left.length && rightIndex < right.length) {
+    if (left[leftIndex] === right[rightIndex]) {
+      leftIndex += 1;
+      rightIndex += 1;
+      continue;
+    }
+    differences += 1;
+    if (differences > 1) return false;
+    if (left.length > right.length) leftIndex += 1;
+    else if (right.length > left.length) rightIndex += 1;
+    else {
+      leftIndex += 1;
+      rightIndex += 1;
+    }
+  }
+  return differences + Number(leftIndex < left.length || rightIndex < right.length) <= 1;
+}
+
+function delegatedRemovalAction(body) {
+  const normalized = normalizeMentionLabel(body);
+  const words = [...normalized.matchAll(/\b[A-Z]{3,}\b/g)];
+  return words.find((match) => delegatedRemovalActions.some((action) =>
+    match[0] === action || differsByAtMostOneCharacter(match[0], action))) ?? null;
+}
+
+const isDelegatedRemovalText = (body) => Boolean(delegatedRemovalAction(body));
+function removeDelegatedRemovalAction(body) {
+  const match = delegatedRemovalAction(body);
+  if (!match) return body;
+  return `${body.slice(0, match.index)} ${body.slice(match.index + match[0].length)}`;
+}
 const assignmentChangePattern = /\b(?:TROCA|TROCAR|TROQUE|SUBSTITUI|SUBSTITUIR|SUBSTITUA|PERMUTA|PERMUTAR|PERMUTE|REMANEJA|REMANEJAR|REMANEJE)\b/;
 const remaneuverPattern = /\b(?:REMANEJA|REMANEJAR|REMANEJE)\b/;
 const isAssignmentChangeText = (body) => assignmentChangePattern.test(normalizeMentionLabel(body));
@@ -702,6 +741,7 @@ O bot responde de cinco formas:
 Para retirar somente serviços extras:
    *@Escalante retirar @militar do dia 19, dia*
    *@Escalante excluir @militar do dia 19, 24h*
+Aceita retirar, tirar, excluir, remover ou apagar e tolera erro de uma letra nesses verbos.
 Quando informar apenas o dia, todos os extras desse militar no dia serão retirados.
 
 Para ajustar somente serviços extras:
@@ -834,7 +874,7 @@ async function executeCommand(member, rawBody, { explicitSlash = false, targetMe
   }
   const delegatedRemoval = isDelegatedRemovalText(normalized);
   if (delegatedRemoval) {
-    const selection = normalized.replace(delegatedRemovalActionPattern, ' ');
+    const selection = removeDelegatedRemovalAction(normalized);
     const parsed = parseSelection(selection);
     if (parsed.error) return parsed.error;
     if (!parsed.choices.length) return `Informe o dia e, se desejar, o turno que será retirado de *${(targetMember ?? member).rank} ${(targetMember ?? member).operational_name}*. Exemplo: *retirar @militar do dia 19, noite*.`;

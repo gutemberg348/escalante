@@ -52,6 +52,8 @@ for (const [input, expected] of [
   ['hoje à noite?', [choice(14, night)]],
   ['hoje 24h', [choice(14, full)]],
   ['hoje', [choice(14, full)]],
+  ['hoj dia', [choice(14, day)]],
+  ['hj noite', [choice(14, night)]],
   ['amanhã dia', [choice(15, day)]],
   ['por gentileza coloque 12h dia hoje?', [choice(14, day)]]
 ]) test(`relative date: ${input}`, () => {
