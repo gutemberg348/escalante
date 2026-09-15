@@ -9,7 +9,7 @@ import { parseMarkingRequest } from './marking-choices.js';
 export { parseNaturalChoices } from './marking-choices.js';
 
 const authDirectory = path.resolve(path.dirname(env.DATABASE_PATH), 'whatsapp-auth');
-const commandHandlerVersion = 'mentions-v6-direct-ordinary-justification';
+const commandHandlerVersion = 'mentions-v8-column-exceptions';
 const connection = {
   socket: null, saveCreds: null, status: 'DISCONNECTED', qrDataUrl: null, qrIssued: false,
   phoneNumber: null, error: null, reconnectTimer: null, reconnectAttempts: 0,
@@ -444,6 +444,163 @@ function parseActiveMarkingRequest(text) {
   });
 }
 
+const columnOpenActionPattern = /\b(?:ABRIR|ABRA|ABRE|LIBERAR|LIBERE|LIBERA|DESTRANCAR|DESTRANQUE)\b/;
+const columnCloseActionPattern = /\b(?:FECHAR|FECHE|FECHA|TRANCAR|TRANQUE|TRANCA)\b/;
+const columnAfterNumberPattern = /\b(?:(?:3|4)\s*(?:A|ª)?|TERCEIRA|QUARTA)\s*(?:COLUNA|POSICAO)(?=\s|[,.]|$)/;
+const columnBeforeNumberPattern = /\b(?:COLUNA|POSICAO)\s*(?:(?:3|4)\s*(?:A|ª)?|TERCEIRA|QUARTA)(?=\s|[,.]|$)/;
+
+function parseColumnCommand(value) {
+  const normalized = normalizeMentionLabel(value);
+  const openMatch = normalized.match(columnOpenActionPattern);
+  const closeMatch = normalized.match(columnCloseActionPattern);
+  const actionMatch = openMatch ?? closeMatch;
+  const columnMatch = normalized.match(columnAfterNumberPattern) ?? normalized.match(columnBeforeNumberPattern);
+  if (!actionMatch || !columnMatch) return null;
+  const column = /(?:4|QUARTA)/.test(columnMatch[0]) ? 4 : 3;
+  const forceDelete = /\bEXCLUA\b/.test(normalized);
+  const selection = normalized
+    .replace(actionMatch[0], ' ')
+    .replace(columnMatch[0], ' ')
+    .replace(/\b(?:EXCLUA|NO|NA|DO|DA|MES|INTEIRO|TODA|TODO)\b/g, ' ');
+  const exceptMatch = selection.match(/\bEXCETO\b/);
+  const dateSelection = exceptMatch
+    ? selection.slice((exceptMatch.index ?? 0) + exceptMatch[0].length)
+    : selection;
+  const parsed = parseActiveMarkingRequest(dateSelection);
+  const parsedDays = [...new Set(parsed.choices.map((choice) => choice.day))];
+  return {
+    action: openMatch ? 'OPEN' : 'CLOSE',
+    column,
+    forceDelete,
+    days: exceptMatch ? [] : parsedDays,
+    excludedDays: exceptMatch ? parsedDays : [],
+    error: parsed.error || (exceptMatch && !parsedDays.length ? 'Informe quais dias devem ficar de fora.' : null)
+  };
+}
+
+async function senderIsGroupAdministrator(socket, message) {
+  try {
+    const metadata = await socket.groupMetadata(message.key.remoteJid);
+    const context = messageContextInfo(message) ?? {};
+    const senderAccounts = new Set([
+      message.key.participant, message.key.participantAlt, message.key.participantPn,
+      context.participant, context.participantAlt, context.participantPn
+    ].filter(Boolean).map(jidAccount));
+    const participant = metadata?.participants?.find((item) =>
+      [item.id, item.lid, item.phoneNumber].filter(Boolean).some((jid) => senderAccounts.has(jidAccount(jid))));
+    return ['admin', 'superadmin'].includes(String(participant?.admin ?? '').toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
+async function applyColumnCommand(request, requestedBy) {
+  if (request.error) return request.error;
+  const competency = activeCompetency();
+  if (!competency) return 'Não há mês ativo para alterar as colunas.';
+  const monthDates = db.prepare(`SELECT DISTINCT service_date FROM service_slots
+    WHERE competency_id=? ORDER BY service_date`).all(competency.id).map((row) => row.service_date);
+  const selectedDays = new Set(request.days);
+  const excludedDays = new Set(request.excludedDays);
+  const targetDates = request.excludedDays.length
+    ? monthDates.filter((date) => !excludedDays.has(Number(dayjs(date).format('D'))))
+    : request.days.length
+      ? monthDates.filter((date) => selectedDays.has(Number(dayjs(date).format('D'))))
+      : monthDates;
+  if (!targetDates.length) return 'Não encontrei a data informada no mês ativo.';
+
+  const administrator = db.prepare(`SELECT id FROM users WHERE role='ADMIN' AND active=1 ORDER BY id LIMIT 1`).get();
+  if (!administrator) return 'Administrador do sistema não encontrado.';
+  const placeholders = targetDates.map(() => '?').join(',');
+  const newCapacity = request.column === 4 ? 3 : 2;
+  const assignmentsToRemove = request.action === 'CLOSE'
+    ? db.prepare(`SELECT a.id,a.position_number,m.rank,m.operational_name,s.service_date,s.period
+        FROM assignments a JOIN service_slots s ON s.id=a.service_slot_id JOIN members m ON m.id=a.member_id
+        WHERE s.competency_id=? AND s.service_date IN (${placeholders})
+          AND a.status='CONFIRMED' AND a.position_number>? ORDER BY s.service_date,s.period,a.position_number`)
+      .all(competency.id, ...targetDates, newCapacity)
+    : [];
+  const excludedDescription = monthDates
+    .filter((date) => excludedDays.has(Number(dayjs(date).format('D'))))
+    .map((date) => dayjs(date).format('DD/MM/YYYY'));
+  const dateDescription = request.excludedDays.length
+    ? `${competency.name} — exceto ${excludedDescription.join(', ')}`
+    : request.days.length
+      ? targetDates.map((date) => dayjs(date).format('DD/MM/YYYY')).join(', ')
+      : `${competency.name} — mês inteiro`;
+  const canonicalDates = request.excludedDays.length
+    ? `exceto dias ${request.excludedDays.join(', ')}`
+    : request.days.length
+      ? `dia ${targetDates.map((date) => Number(dayjs(date).format('D'))).join(', ')}`
+      : 'no mês inteiro';
+
+  if (assignmentsToRemove.length && !request.forceDelete) {
+    const affected = assignmentsToRemove.slice(0, 12).map((assignment) =>
+      `• ${dayjs(assignment.service_date).format('DD/MM')} ${periodLabel(assignment.period)}, ${assignment.position_number}ª posição: ${assignment.rank} ${assignment.operational_name}`);
+    if (assignmentsToRemove.length > affected.length) affected.push(`• e mais ${assignmentsToRemove.length - affected.length} marcação(ões)`);
+    return `⚠️ *${request.column}ª COLUNA NÃO FOI FECHADA*
+
+Existem ${assignmentsToRemove.length} marcação(ões) na(s) posição(ões) que serão fechadas.
+
+${affected.join('\n')}
+
+Para excluir essas marcações e fechar, envie:
+*@Escalante fechar ${request.column}ª coluna ${canonicalDates} EXCLUA*`;
+  }
+
+  const previous = new Map(db.prepare(`SELECT service_date,third_column_open,fourth_column_open
+    FROM schedule_pdf_column_releases WHERE competency_id=?`).all(competency.id).map((row) => [row.service_date, row]));
+  let opened = false;
+  const resultingColumns = [];
+  db.transaction(() => {
+    if (request.action === 'CLOSE' && request.forceDelete) {
+      const remove = db.prepare('DELETE FROM assignments WHERE id=?');
+      for (const assignment of assignmentsToRemove) remove.run(assignment.id);
+    }
+    const save = db.prepare(`INSERT INTO schedule_pdf_column_releases
+      (competency_id,service_date,third_column_open,fourth_column_open,updated_by,updated_at)
+      VALUES (?,?,?,?,?,?) ON CONFLICT(competency_id,service_date) DO UPDATE SET
+      third_column_open=excluded.third_column_open,fourth_column_open=excluded.fourth_column_open,
+      updated_by=excluded.updated_by,updated_at=excluded.updated_at`);
+    const removeRelease = db.prepare('DELETE FROM schedule_pdf_column_releases WHERE competency_id=? AND service_date=?');
+    const updateCapacity = db.prepare(`UPDATE service_slots SET current_capacity=?,updated_at=?
+      WHERE competency_id=? AND service_date=?`);
+    const stamp = now();
+    for (const serviceDate of targetDates) {
+      const before = previous.get(serviceDate);
+      let third = Boolean(before?.third_column_open || before?.fourth_column_open);
+      let fourth = Boolean(before?.fourth_column_open);
+      if (request.action === 'OPEN') {
+        if (request.column === 3) third = true;
+        else { third = true; fourth = true; }
+        if ((request.column === 3 && !before?.third_column_open) || (request.column === 4 && !before?.fourth_column_open)) opened = true;
+      } else if (request.column === 4) fourth = false;
+      else { third = false; fourth = false; }
+      const capacity = fourth ? 4 : third ? 3 : 2;
+      if (third || fourth) save.run(competency.id, serviceDate, Number(third), Number(fourth), administrator.id, stamp);
+      else removeRelease.run(competency.id, serviceDate);
+      updateCapacity.run(capacity, stamp, competency.id, serviceDate);
+      resultingColumns.push({ serviceDate, third, fourth, capacity });
+    }
+  })();
+  audit({ userId: administrator.id, action: `WHATSAPP_${request.action}_COLUMN`, entityType: 'SCHEDULE_PDF', entityId: competency.id,
+    before: { assignmentsToRemove }, after: { column: request.column, dates: targetDates, excludedDays: request.excludedDays, resultingColumns },
+    reason: `Solicitado no grupo por ${requestedBy.rank} ${requestedBy.operational_name}` });
+
+  let queueWarning = '';
+  if (request.action === 'OPEN' && opened) {
+    const { startColumnMarkingRound } = await import('./automation.js');
+    const round = await startColumnMarkingRound({ competencyId: competency.id, column: request.column,
+      userId: administrator.id, reason: 'WHATSAPP_COLUMN_OPEN' });
+    if (!round.started) queueWarning = `\nFila não iniciada: ${round.reason}`;
+  }
+  const removed = assignmentsToRemove.length && request.forceDelete
+    ? `\n${assignmentsToRemove.length} marcação(ões) excluída(s).`
+    : '';
+  return `*${request.column}ª COLUNA ${request.action === 'OPEN' ? 'ABERTA' : 'FECHADA'}*
+${dateDescription}${removed}${queueWarning}`;
+}
+
 function extractDisplayPrefix(value) {
   const text = String(value ?? '');
   const matches = [...text.matchAll(/\(([^()]*)\)/g)];
@@ -535,10 +692,11 @@ export async function handleIncomingMessages(socket, { messages }) {
     const originalIdentity = resolveMemberIdentity(message.key);
     if (!isAddressedToBot(socket, message, body)) continue;
     const directText = withoutBotMention(body);
-    const directDecoration = extractDisplayPrefix(directText);
     const directSelection = parseMarkingRequest(directText);
     const directChoices = directSelection.choices;
     const directTarget = await mentionedMember(socket, message);
+    const columnRequest = parseColumnCommand(directText);
+    const groupAdministrator = columnRequest ? await senderIsGroupAdministrator(socket, message) : false;
     const multiTargetRequest = directTarget.targets?.length > 1 && isDelegatedMarkingText(directText);
     const quotedCandidate = quotedMemberRequest(socket, message);
     const hasDirectMarkingRequest = directChoices.length > 0 || Boolean(directSelection.error)
@@ -588,7 +746,8 @@ export async function handleIncomingMessages(socket, { messages }) {
         : await executeCommand(identity.member, commandText, {
           explicitSlash,
           targetMember,
-          requiresTarget: !quotedRequest && (directTarget.required || Boolean(quotedTargetIdentity))
+          requiresTarget: !quotedRequest && (directTarget.required || Boolean(quotedTargetIdentity)),
+          groupAdministrator
         })
       : quotedRequest
         ? 'O autor da mensagem citada não está cadastrado no efetivo.'
@@ -778,6 +937,13 @@ Outros atalhos:
 */cancelar 125* - cancela uma marcação
 */passo a vez* - não marca nesta rodada
 
+Comandos para administradores do grupo:
+*@Escalante abrir 3ª coluna* - abre no mês inteiro
+*@Escalante abrir 4ª coluna dia 17* - abre somente nessa data
+*@Escalante abrir 4ª coluna exceto dias 17 e 18* - abre nos demais dias
+*@Escalante fechar 4ª coluna dia 17* - fecha se a posição estiver vazia
+Se houver marcações, o bot não fecha e pede uma confirmação terminada em *EXCLUA*.
+
 Envie */comandos* ou apenas *comandos* para ver esta lista.`;
 }
 
@@ -847,7 +1013,7 @@ function nextMonthGenerationWarning() {
   return `⚠️ *CONFIRMAR GERAÇÃO DO PRÓXIMO MÊS*\n\nSerá criada a escala de *${monthName} de ${target.year()}* com o ciclo ordinário 1x4.\n\n• O mês atual não será apagado.\n• O novo PDF será publicado nos grupos.\n• O novo mês passará a ser usado pelo comando /escala.\n• A fila de marcação poderá ser iniciada.\n\nPara continuar, envie exatamente:\n*/confirmar-gerar-proximo-mes*\n\nPara desistir, não envie a confirmação.`;
 }
 
-async function executeCommand(member, rawBody, { explicitSlash = false, targetMember = null, requiresTarget = false } = {}) {
+async function executeCommand(member, rawBody, { explicitSlash = false, targetMember = null, requiresTarget = false, groupAdministrator = false } = {}) {
   if (requiresTarget && !targetMember) return 'Não identifiquei o militar marcado. Nenhuma marcação foi feita.';
   const commandBody = rawBody.trim().replace(/^\/+/, '').trim();
   const decoratedRequest = extractDisplayPrefix(commandBody);
@@ -857,6 +1023,11 @@ async function executeCommand(member, rawBody, { explicitSlash = false, targetMe
   if (['MENU', 'AJUDA', 'COMANDOS'].includes(command)) return commandMenu();
   if (command === 'MESES') return generatedCompetenciesMessage();
   const parseSelection = parseActiveMarkingRequest;
+  const columnRequest = parseColumnCommand(commandBody);
+  if (columnRequest) {
+    if (!groupAdministrator) return 'Somente administradores do grupo podem abrir ou fechar colunas.';
+    return applyColumnCommand(columnRequest, member);
+  }
   if (['JUSTIFICAR', 'JUSTIFICA', 'JUSTIFIQUE'].includes(command)) {
     const justifiedMember = targetMember ?? (!requiresTarget ? member : null);
     if (!justifiedMember) return 'Marque o militar cuja escala será justificada. Exemplo: */justificar @militar hoje dia (afastado)*.';

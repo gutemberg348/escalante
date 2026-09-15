@@ -265,6 +265,15 @@ const migrations = [
         db.exec('ALTER TABLE assignments ADD COLUMN display_prefix TEXT');
       }
     }
+  },
+  {
+    version: '016_member_ordinary_eligible',
+    apply() {
+      const columns = db.prepare('PRAGMA table_info(members)').all();
+      if (!columns.some((column) => column.name === 'ordinary_eligible')) {
+        db.exec('ALTER TABLE members ADD COLUMN ordinary_eligible INTEGER NOT NULL DEFAULT 1');
+      }
+    }
   }
 ];
 

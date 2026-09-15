@@ -23,7 +23,8 @@ CREATE TABLE IF NOT EXISTS members (
  id INTEGER PRIMARY KEY AUTOINCREMENT, rank TEXT NOT NULL, operational_name TEXT NOT NULL, full_name TEXT,
  phone_number TEXT UNIQUE, whatsapp_jid TEXT UNIQUE, seniority_position INTEGER UNIQUE,
  unit_type TEXT NOT NULL, default_wing_id INTEGER, operational_status TEXT NOT NULL DEFAULT 'ACTIVE',
- authorization_status TEXT NOT NULL DEFAULT 'AUTHORIZED', active INTEGER NOT NULL DEFAULT 1, monthly_hour_limit INTEGER, hour_limit_exempt INTEGER NOT NULL DEFAULT 0, notes TEXT,
+ authorization_status TEXT NOT NULL DEFAULT 'AUTHORIZED', active INTEGER NOT NULL DEFAULT 1, monthly_hour_limit INTEGER, hour_limit_exempt INTEGER NOT NULL DEFAULT 0,
+ ordinary_eligible INTEGER NOT NULL DEFAULT 1, notes TEXT,
  created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
  FOREIGN KEY(default_wing_id) REFERENCES wings(id)
 );

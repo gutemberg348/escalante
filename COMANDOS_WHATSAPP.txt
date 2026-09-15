@@ -1,0 +1,300 @@
+COMANDOS DO WHATSAPP — ESCALA CICC
+=================================
+
+FORMAS DE CHAMAR O BOT
+----------------------
+
+1. Com barra:
+   /vagas
+   /escala
+   /minhas
+
+2. Marcando o bot:
+   @Escalante vagas
+   @Escalante dia 20 noite
+
+3. Respondendo a uma mensagem do bot:
+   dia 20 noite
+
+4. Respondendo à mensagem de um militar e marcando o bot:
+   @Escalante dia 20 noite
+   Nesse caso, o pedido será feito para o autor da mensagem respondida.
+
+5. Marcando o bot e o militar:
+   @Escalante marque @Militar dia 20 noite
+
+
+COMANDOS NORMAIS
+================
+
+1. MARCAR PARA SI MESMO
+-----------------------
+
+   /marcar dia 20 dia
+   /marcar dia 20 noite
+   /marcar dia 20 24h
+   @Escalante dia 20 dia
+   @Escalante hoje noite
+   @Escalante amanhã 24 horas
+
+Sem informar o turno, o dia será interpretado como 24 horas: dia e noite.
+
+
+2. MARCAR OUTRO MILITAR
+-----------------------
+
+   @Escalante marque @Militar dia 20 dia
+   @Escalante coloque @Militar dia 20 noite
+   @Escalante escalar @Militar dia 20 24h
+
+Palavras aceitas para marcar:
+   coloca, colocar, coloque
+   põe, por, ponha
+   bota, botar, bote
+   marca, marcar, marque
+   escala, escalar
+   inclua
+   adiciona, adicionar
+   cria, criar, crie
+
+Também pode marcar dois militares na mesma mensagem:
+   @Escalante escalar @Militar1 hoje dia e @Militar2 noite
+
+
+3. FORMAS DE INFORMAR DIA E TURNO
+---------------------------------
+
+   dia 20
+   20 dia
+   20 D
+   20 noite
+   20 N
+   20 24h
+   20 24 horas
+   hoje dia
+   hoje noite
+   hoje 24h
+   amanhã dia
+   dia 20; dia 21 noite
+   dia 20 dia; dia 21 noite
+   dias 20 e 21 noite
+   dia 20 das 07h às 19h
+   dia 20 das 19h às 07h
+
+Dia ou D: 07h às 19h.
+Noite ou N: 19h às 07h.
+Somente "12h" não define o turno; escreva dia ou noite.
+
+
+4. CONSULTAR
+------------
+
+   /status
+   Mostra sua situação e autorização.
+
+   /minhas
+   Mostra suas marcações.
+
+   /horas @Militar
+   Mostra os horários e as horas do militar.
+
+   /vagas
+   Mostra as vagas e envia o PDF atualizado.
+
+   /cronograma
+   Mostra a ordem da antiguidade e o prazo de cada militar.
+
+   /escala
+   Envia o PDF do mês ativo.
+
+   /comandos
+   comandos
+   Mostra a lista de ajuda no grupo.
+
+
+5. RETIRAR SERVIÇO EXTRA
+------------------------
+
+   @Escalante retirar @Militar dia 19 dia
+   @Escalante tirar @Militar dia 19 noite
+   @Escalante excluir @Militar dia 19 24h
+   @Escalante remover @Militar hoje dia
+   @Escalante apagar @Militar dia 19
+
+Palavras aceitas:
+   retirar, retira, retire
+   tirar, tira, tire
+   excluir, exclui, exclua
+   remover, remove, remova
+   apagar, apaga, apague
+
+O bot tolera erro de uma letra nesses verbos.
+Sem informar o turno, remove todos os serviços extras do militar naquele dia.
+Serviço ordinário não é removido por esse comando.
+
+
+6. CANCELAR UM SERVIÇO EXTRA PELO CÓDIGO
+----------------------------------------
+
+   /cancelar 125
+
+O número é o código do horário mostrado nas mensagens do bot.
+Serviço ordinário não pode ser cancelado por esse comando.
+
+
+7. JUSTIFICAR SERVIÇO ORDINÁRIO EXISTENTE
+-----------------------------------------
+
+Forma direta, sem escrever "justificar":
+   @Escalante @Militar hoje dia (LICENÇA)
+   @Escalante @Militar dia 17 noite (ATESTADO)
+   @Escalante @Militar dia 17 (AFASTADO)
+
+Formas com comando:
+   /justificar @Militar hoje dia (LICENÇA)
+   @Escalante justificar @Militar dia 17 noite (ATESTADO)
+   @Escalante justifica @Militar dia 17 noite (ATESTADO)
+   @Escalante justifique @Militar dia 17 noite (ATESTADO)
+
+O texto entre parênteses é colocado depois do nome no PDF e no painel.
+A justificativa só altera uma escala ORDINÁRIA que já exista para aquele militar,
+data e turno. Ela não cria vaga, serviço extra nem horas.
+Sem informar o turno, verifica os dois turnos do dia.
+
+
+8. TROCAR, PERMUTAR OU REMANEJAR SERVIÇOS EXTRAS
+------------------------------------------------
+
+Trocar um militar por outro no mesmo horário:
+   @Escalante troque @Militar1 dia 17 noite por @Militar2
+   @Escalante substituir @Militar1 dia 17 noite por @Militar2
+
+Permutar dois militares entre horários:
+   @Escalante permute @Militar1 dia 17 noite com @Militar2 dia 20 dia
+
+Remanejar o mesmo militar para outro horário:
+   @Escalante remaneje @Militar dia 17 noite para dia 20 dia
+
+Palavras aceitas:
+   troca, trocar, troque
+   substitui, substituir, substitua
+   permuta, permutar, permute
+   remaneja, remanejar, remaneje
+
+Cada lado deve informar exatamente um turno.
+Esses comandos alteram somente serviços EXTRAS. Ordinários ficam protegidos.
+
+
+9. PASSAR A VEZ
+---------------
+
+   /passo a vez
+   @Escalante passo a vez
+
+
+COMANDOS ADMINISTRATIVOS E DE GESTÃO
+====================================
+
+1. MESES E PDF
+--------------
+
+   /meses
+   Mostra os meses gerados e qual está ativo no WhatsApp.
+
+   /escala 10/2026
+   @Escalante escala outubro de 2026
+   Troca o mês ativo e envia o PDF correspondente.
+
+
+2. GERAR O PRÓXIMO MÊS
+----------------------
+
+   /gerar-proximo-mes
+   @Escalante gerar escala do próximo mês
+
+O bot mostra o aviso antes de gerar. Para confirmar:
+
+   /confirmar-gerar-proximo-mes
+
+O novo mês é gerado com o ciclo ordinário 1x4 e o PDF é publicado.
+
+
+3. ABRIR A 3ª OU A 4ª COLUNA
+----------------------------
+
+Somente administradores do grupo podem usar estes comandos.
+
+Abrir no mês inteiro:
+   @Escalante abrir 3ª coluna
+   @Escalante liberar quarta coluna
+   @Escalante destrancar coluna 4
+
+Abrir somente em datas específicas:
+   @Escalante abrir 3ª coluna dia 17
+   @Escalante liberar 4ª coluna hoje
+   @Escalante abrir quarta coluna dias 17 e 18
+
+Abrir o mês inteiro, menos algumas datas:
+   @Escalante abrir 4ª coluna exceto dia 17
+   @Escalante abrir quarta coluna exceto dias 17 e 18
+   @Escalante liberar 3ª coluna exceto dias 5, 10 e 20
+
+Variações aceitas para abrir:
+   abrir, abra, abre
+   liberar, libere, libera
+   destrancar, destranque
+
+Variações aceitas para a coluna:
+   3, 3ª, terceira
+   4, 4ª, quarta
+   coluna ou posição
+
+A 4ª coluna depende da 3ª. Ao abrir a 4ª, a 3ª permanece ou também fica aberta.
+Abrir uma nova coluna inicia a nova fila e publica o cronograma no grupo.
+
+
+4. FECHAR A 3ª OU A 4ª COLUNA
+-----------------------------
+
+Somente administradores do grupo podem usar estes comandos.
+
+Fechar no mês inteiro:
+   @Escalante fechar 4ª coluna
+   @Escalante trancar terceira coluna
+
+Fechar somente em datas específicas:
+   @Escalante fechar 4ª coluna dia 17
+   @Escalante trancar coluna 3 hoje
+   @Escalante fechar quarta coluna dias 17 e 18
+
+Fechar o mês inteiro, menos algumas datas:
+   @Escalante fechar 4ª coluna exceto dia 17
+   @Escalante trancar terceira coluna exceto dias 17 e 18
+
+Variações aceitas para fechar:
+   fechar, feche, fecha
+   trancar, tranque, tranca
+
+Se as posições estiverem vazias, a coluna fecha imediatamente.
+Se houver militares marcados, nada será alterado. O bot mostrará um aviso e
+montará a frase de confirmação. Para excluir as marcações e fechar, reenvie a
+frase terminando com EXCLUA. Exemplo:
+
+   @Escalante fechar 4ª coluna dia 17 EXCLUA
+
+Ao fechar a 3ª coluna, a 4ª também será fechada nos mesmos dias.
+EXCLUA remove as marcações que ocupam as posições fechadas; use somente depois
+de conferir o aviso mostrado pelo bot.
+
+
+REGRAS IMPORTANTES
+==================
+
+- A 1ª e a 2ª posições permanecem abertas.
+- Serviços ordinários aparecem em preto e seguem o ciclo automático 1x4.
+- Serviços extras aparecem em vermelho e entram na contagem de horas.
+- O mesmo militar não pode ocupar duas posições no mesmo turno.
+- O limite mensal aparece como alerta no painel, mas não bloqueia a marcação no grupo.
+- Justificativa não cria marcação.
+- Retirar, trocar, permutar e remanejar pelo grupo afetam somente serviços extras.
+- Fechar coluna com EXCLUA é uma ação destrutiva.

@@ -46,7 +46,8 @@ export function ensureCompetencySchedule(value) {
 function eligibleForOrdinary(member) {
   return Number(member?.active) === 1
     && member.operational_status === 'ACTIVE'
-    && member.authorization_status === 'AUTHORIZED';
+    && member.authorization_status === 'AUTHORIZED'
+    && Number(member.ordinary_eligible) === 1;
 }
 
 export function generateOrdinaryAssignments({ competencyId, userId = null, reason = 'Geração mensal da escala ordinária 1x4' }) {
@@ -91,7 +92,8 @@ export function generateOrdinaryAssignments({ competencyId, userId = null, reaso
           name: member ? `${member.rank} ${member.operational_name}` : `Militar ${anchor.member_id}`,
           active: Boolean(member?.active),
           operationalStatus: member?.operational_status ?? 'NOT_FOUND',
-          authorizationStatus: member?.authorization_status ?? 'NOT_FOUND'
+          authorizationStatus: member?.authorization_status ?? 'NOT_FOUND',
+          ordinaryEligible: Boolean(member?.ordinary_eligible)
         });
         continue;
       }

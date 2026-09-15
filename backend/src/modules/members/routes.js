@@ -12,7 +12,8 @@ const memberSchema = z.object({
   phone_number: z.string().regex(/^\d{10,15}$/).optional().nullable(), whatsapp_jid: z.string().endsWith('@s.whatsapp.net').optional().nullable(),
   unit_type: z.string().min(1), default_wing_id: z.coerce.number().int().positive().optional().nullable(),
   operational_status: statuses.optional(), authorization_status: authorizations.optional(), active: z.boolean().optional(),
-  monthly_hour_limit: z.coerce.number().int().min(12).max(192).optional().nullable(), hour_limit_exempt: z.boolean().optional(), notes: z.string().optional().nullable()
+  monthly_hour_limit: z.coerce.number().int().min(12).max(192).optional().nullable(), hour_limit_exempt: z.boolean().optional(),
+  ordinary_eligible: z.boolean().optional(), notes: z.string().optional().nullable()
 });
 const base = `SELECT m.*, w.name AS wing_name FROM members m LEFT JOIN wings w ON w.id=m.default_wing_id`;
 
@@ -92,6 +93,7 @@ router.post('/', allow('ADMIN','SCHEDULER'), async (req, res, next) => {
       default_wing_id: input.default_wing_id ?? null,
       monthly_hour_limit: input.monthly_hour_limit ?? null,
       hour_limit_exempt: input.hour_limit_exempt ? 1 : 0,
+      ordinary_eligible: input.ordinary_eligible === false ? 0 : 1,
       notes: input.notes ?? null,
       seniority_position: input.authorization_status === 'NOT_AUTHORIZED' ? null : nextPosition,
       operational_status: input.operational_status ?? 'ACTIVE',
@@ -101,8 +103,8 @@ router.post('/', allow('ADMIN','SCHEDULER'), async (req, res, next) => {
       updated_at: stamp
     };
     const result = db.transaction(() => {
-      const inserted = db.prepare(`INSERT INTO members (rank,operational_name,full_name,phone_number,whatsapp_jid,seniority_position,unit_type,default_wing_id,operational_status,authorization_status,active,monthly_hour_limit,hour_limit_exempt,notes,created_at,updated_at)
-      VALUES (@rank,@operational_name,@full_name,@phone_number,@whatsapp_jid,@seniority_position,@unit_type,@default_wing_id,@operational_status,@authorization_status,@active,@monthly_hour_limit,@hour_limit_exempt,@notes,@created_at,@updated_at)`)
+      const inserted = db.prepare(`INSERT INTO members (rank,operational_name,full_name,phone_number,whatsapp_jid,seniority_position,unit_type,default_wing_id,operational_status,authorization_status,active,monthly_hour_limit,hour_limit_exempt,ordinary_eligible,notes,created_at,updated_at)
+      VALUES (@rank,@operational_name,@full_name,@phone_number,@whatsapp_jid,@seniority_position,@unit_type,@default_wing_id,@operational_status,@authorization_status,@active,@monthly_hour_limit,@hour_limit_exempt,@ordinary_eligible,@notes,@created_at,@updated_at)`)
         .run(record);
       synchronizeWhatsAppIdentities(inserted.lastInsertRowid, record.phone_number, record.whatsapp_jid);
       return inserted;
@@ -136,11 +138,14 @@ router.patch('/:id', allow('ADMIN','SCHEDULER'), async (req, res, next) => {
       hour_limit_exempt: input.hour_limit_exempt === undefined
         ? Number(old.hour_limit_exempt || 0)
         : (input.hour_limit_exempt ? 1 : 0),
+      ordinary_eligible: input.ordinary_eligible === undefined
+        ? Number(old.ordinary_eligible ?? 1)
+        : (input.ordinary_eligible ? 1 : 0),
       updated_at: now()
     };
     db.transaction(() => {
       if (phoneChanged) db.prepare('DELETE FROM member_whatsapp_identities WHERE member_id=?').run(merged.id);
-      db.prepare(`UPDATE members SET rank=@rank,operational_name=@operational_name,full_name=@full_name,phone_number=@phone_number,whatsapp_jid=@whatsapp_jid,unit_type=@unit_type,default_wing_id=@default_wing_id,operational_status=@operational_status,authorization_status=@authorization_status,active=@active,monthly_hour_limit=@monthly_hour_limit,hour_limit_exempt=@hour_limit_exempt,notes=@notes,updated_at=@updated_at WHERE id=@id`).run(merged);
+      db.prepare(`UPDATE members SET rank=@rank,operational_name=@operational_name,full_name=@full_name,phone_number=@phone_number,whatsapp_jid=@whatsapp_jid,unit_type=@unit_type,default_wing_id=@default_wing_id,operational_status=@operational_status,authorization_status=@authorization_status,active=@active,monthly_hour_limit=@monthly_hour_limit,hour_limit_exempt=@hour_limit_exempt,ordinary_eligible=@ordinary_eligible,notes=@notes,updated_at=@updated_at WHERE id=@id`).run(merged);
       synchronizeWhatsAppIdentities(merged.id, merged.phone_number, merged.whatsapp_jid);
     })();
     await discoverMemberWhatsAppJid(merged.id).catch(() => null);

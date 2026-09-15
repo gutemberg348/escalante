@@ -24,6 +24,8 @@ const alex = '5511993333333@s.whatsapp.net';
 const other = '5511994444444@s.whatsapp.net';
 const lid = '214000000000018@lid';
 const stamp = now();
+db.prepare(`INSERT INTO users (id,name,email,password_hash,role,active,must_change_password,created_at,updated_at)
+  VALUES (1,'Administrador de teste','admin-test@example.com','test-hash','ADMIN',1,0,?,?)`).run(stamp, stamp);
 const add = db.prepare(`INSERT INTO members (id,rank,operational_name,phone_number,whatsapp_jid,unit_type,created_at,updated_at)
   VALUES (?,'Sgt',?,?,?,'CICC',?,?)`);
 add.run(1, 'Remetente', sender.split('@')[0], sender, stamp, stamp);
@@ -40,8 +42,13 @@ let sequence = 0;
 let replies;
 let socket;
 beforeEach(() => {
-  db.exec('DELETE FROM assignments; DELETE FROM processed_messages; DELETE FROM whatsapp_messages; DELETE FROM member_whatsapp_identities;');
-  db.prepare("UPDATE members SET active=1,operational_status='ACTIVE',authorization_status='AUTHORIZED'").run();
+  db.exec(`DELETE FROM assignments;
+    DELETE FROM processed_messages;
+    DELETE FROM whatsapp_messages;
+    DELETE FROM member_whatsapp_identities;
+    DELETE FROM schedule_pdf_column_releases;
+    UPDATE service_slots SET current_capacity=2;`);
+  db.prepare("UPDATE members SET active=1,operational_status='ACTIVE',authorization_status='AUTHORIZED',ordinary_eligible=1").run();
   setting.run('bot_active_competency_id', String(competency.id), stamp);
   replies = [];
   socket = {
@@ -164,6 +171,14 @@ test('an inactive target does not cause booking in sender name', async () => {
   await receive(phrase);
   assert.deepEqual(assignedIds(), []);
   assert.match(replies[0].text, /não permite/);
+});
+test('a member excluded from ordinary generation can still use the bot and book an extra shift', async () => {
+  db.prepare('UPDATE members SET ordinary_eligible=0 WHERE id=18').run();
+
+  await receive('@Escalante marque @Alex no dia 20 noite');
+
+  assert.deepEqual(assignedIds(), [18]);
+  assert.deepEqual(db.prepare('SELECT service_type FROM assignments').all(), [{ service_type: 'EXTRAORDINARY' }]);
 });
 test('a natural self request with only the bot mention remains supported', async () => {
   await receive('@Escalante põe dia 20 noite', [bot]);
@@ -403,6 +418,77 @@ test('a group exchange command never changes an ordinary assignment', async () =
     { member_id: 18, service_type: 'ORDINARY', protocol: 'ORDINARY-NOT-REPLACED' }
   ]);
   assert.match(replies.at(-1).text, /ordinário/i);
+});
+
+test('only a group administrator can open a schedule column', async () => {
+  await receive('@Escalante abrir 3ª coluna dia 17', [bot]);
+
+  const capacities = db.prepare(`SELECT DISTINCT current_capacity FROM service_slots
+    WHERE competency_id=? AND service_date=?`).all(competency.id, `${futureYear}-09-17`);
+  assert.deepEqual(capacities, [{ current_capacity: 2 }]);
+  assert.match(replies.at(-1).text, /Somente administradores do grupo/i);
+});
+
+test('a group administrator can open the fourth column on one date only', async () => {
+  socket.groupMetadata = async () => ({ participants: [{ id: sender, admin: 'admin' }] });
+
+  await receive('@Escalante liberar 4ª coluna dia 17', [bot]);
+
+  assert.match(replies.at(-1).text, /4ª COLUNA ABERTA/);
+  assert.deepEqual(db.prepare(`SELECT service_date,third_column_open,fourth_column_open
+    FROM schedule_pdf_column_releases WHERE competency_id=?`).all(competency.id), [
+    { service_date: `${futureYear}-09-17`, third_column_open: 1, fourth_column_open: 1 }
+  ]);
+  assert.deepEqual(db.prepare(`SELECT service_date,current_capacity FROM service_slots
+    WHERE competency_id=? AND service_date IN (?,?) AND period='DIURNO' ORDER BY service_date`)
+    .all(competency.id, `${futureYear}-09-17`, `${futureYear}-09-18`), [
+    { service_date: `${futureYear}-09-17`, current_capacity: 4 },
+    { service_date: `${futureYear}-09-18`, current_capacity: 2 }
+  ]);
+  assert.match(replies.at(-1).text, /4ª COLUNA ABERTA/);
+});
+
+test('a group administrator can open the fourth column on the whole month except selected days', async () => {
+  socket.groupMetadata = async () => ({ participants: [{ id: sender, admin: 'admin' }] });
+
+  await receive('@Escalante abrir 4ª coluna exceto dias 17 e 18', [bot]);
+
+  assert.match(replies.at(-1).text, /exceto 17\/09\/\d{4}, 18\/09\/\d{4}/i);
+  assert.deepEqual(db.prepare(`SELECT service_date,current_capacity FROM service_slots
+    WHERE competency_id=? AND service_date IN (?,?,?) AND period='DIURNO' ORDER BY service_date`)
+    .all(competency.id, `${futureYear}-09-16`, `${futureYear}-09-17`, `${futureYear}-09-18`), [
+    { service_date: `${futureYear}-09-16`, current_capacity: 4 },
+    { service_date: `${futureYear}-09-17`, current_capacity: 2 },
+    { service_date: `${futureYear}-09-18`, current_capacity: 2 }
+  ]);
+});
+
+test('closing an occupied column warns first and only deletes after EXCLUA', async () => {
+  socket.groupMetadata = async () => ({ participants: [{ id: sender, admin: 'superadmin' }] });
+  const serviceDate = `${futureYear}-09-17`;
+  const slot = db.prepare(`SELECT id FROM service_slots WHERE competency_id=? AND service_date=? AND period='DIURNO'`)
+    .get(competency.id, serviceDate);
+  db.prepare(`INSERT INTO schedule_pdf_column_releases
+    (competency_id,service_date,third_column_open,fourth_column_open,updated_by,updated_at)
+    VALUES (?,?,1,1,1,?)`).run(competency.id, serviceDate, stamp);
+  db.prepare('UPDATE service_slots SET current_capacity=4 WHERE competency_id=? AND service_date=?').run(competency.id, serviceDate);
+  db.prepare(`INSERT INTO assignments
+    (service_slot_id,position_number,member_id,service_type,status,protocol,confirmed_at,created_at,updated_at)
+    VALUES (?,4,?,'EXTRAORDINARY','CONFIRMED',?,?,?,?)`).run(slot.id, 18, 'COLUMN-4-TEST', stamp, stamp, stamp);
+
+  await receive('@Escalante fechar 4ª coluna dia 17', [bot]);
+
+  assert.equal(db.prepare('SELECT COUNT(*) total FROM assignments').get().total, 1);
+  assert.equal(db.prepare('SELECT current_capacity FROM service_slots WHERE id=?').get(slot.id).current_capacity, 4);
+  assert.match(replies.at(-1).text, /NÃO FOI FECHADA/);
+  assert.match(replies.at(-1).text, /EXCLUA/);
+
+  await receive('@Escalante fechar 4ª coluna dia 17 EXCLUA', [bot]);
+
+  assert.equal(db.prepare('SELECT COUNT(*) total FROM assignments').get().total, 0);
+  assert.equal(db.prepare('SELECT current_capacity FROM service_slots WHERE id=?').get(slot.id).current_capacity, 3);
+  assert.match(replies.at(-1).text, /4ª COLUNA FECHADA/);
+  assert.match(replies.at(-1).text, /1 marcação\(ões\) excluída/);
 });
 
 for (const [suffix, expectedPeriods] of [
