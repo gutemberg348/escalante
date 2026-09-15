@@ -9,7 +9,7 @@ import { parseMarkingRequest } from './marking-choices.js';
 export { parseNaturalChoices } from './marking-choices.js';
 
 const authDirectory = path.resolve(path.dirname(env.DATABASE_PATH), 'whatsapp-auth');
-const commandHandlerVersion = 'mentions-v2';
+const commandHandlerVersion = 'mentions-v5-ordinary-justification';
 const connection = {
   socket: null, saveCreds: null, status: 'DISCONNECTED', qrDataUrl: null, qrIssued: false,
   phoneNumber: null, error: null, reconnectTimer: null, reconnectAttempts: 0,
@@ -276,7 +276,6 @@ function isAddressedToBot(socket, message, body) {
 }
 
 function quotedMemberRequest(socket, message) {
-  if (!mentionsBot(socket, message)) return null;
   const context = messageContextInfo(message);
   const quotedBody = textFromContent(context?.quotedMessage).trim();
   if (!quotedBody || !context?.participant) return null;
@@ -333,13 +332,17 @@ async function mentionedMember(socket, message) {
   const mentioned = [...new Set(messageContextInfo(message)?.mentionedJid ?? [])]
     .filter((jid) => !botIds.has(jidAccount(jid)));
   const matches = new Map();
+  const targets = [];
   let unresolved = false;
   for (const jid of mentioned) {
     const resolved = await resolveMemberIdentityWithMapping(socket, {
       participant: jid,
       remoteJid: message.key.remoteJid
     });
-    if (resolved.member) matches.set(resolved.member.id, resolved.member);
+    if (resolved.member) {
+      matches.set(resolved.member.id, resolved.member);
+      targets.push({ jid, member: resolved.member });
+    }
     else unresolved = true;
   }
   if (mentioned.length) {
@@ -347,9 +350,10 @@ async function mentionedMember(socket, message) {
     // from the text if that contact could not be identified.
     return {
       required: true, source: 'MENTION',
+      targets: unresolved ? [] : targets.filter((target, index, items) => items.findIndex((item) => item.member.id === target.member.id) === index),
       member: !unresolved && matches.size === 1 ? [...matches.values()][0] : null,
       error: unresolved ? 'Não identifiquei o contato marcado no efetivo. Nenhuma marcação foi feita.'
-        : matches.size !== 1 ? 'Marque apenas um militar por pedido. Nenhuma marcação foi feita.' : null
+        : matches.size !== 1 ? 'Informe um dia e turno para cada militar marcado. Nenhuma marcação foi feita.' : null
     };
   }
   const body = textFromMessage(message);
@@ -371,6 +375,7 @@ async function mentionedMember(socket, message) {
   }
   if (textAccounts.length) return {
     required: true, source: 'TEXT_ACCOUNT',
+    targets: [],
     member: !unresolved && matches.size === 1 ? [...matches.values()][0] : null,
     error: unresolved || matches.size !== 1 ? 'Não identifiquei um único militar marcado. Nenhuma marcação foi feita.' : null
   };
@@ -378,12 +383,99 @@ async function mentionedMember(socket, message) {
   const named = memberMentionedByName(body);
   const required = textMentions.length >= 2 || Boolean(named)
     || (withoutBotMention(body).startsWith('/') && textMentions.length > 0);
-  return { required, source: required ? 'TEXT_NAME' : 'SELF', member: named,
+  return { required, source: required ? 'TEXT_NAME' : 'SELF', targets: [], member: named,
     error: required && !named ? 'Não identifiquei um único militar marcado. Selecione o contato usando @. Nenhuma marcação foi feita.' : null };
 }
 
-const delegatedMarkingPattern = /\b(?:COLOCA|COLOCAR|COLOQUE|POE|POR|PONHA|BOTA|BOTAR|BOTE|MARCA|MARCAR|MARQUE|ESCALA|ESCALAR|INCLUA|ADICIONA|ADICIONAR)\b/;
+const delegatedMarkingPattern = /\b(?:COLOCA|COLOCAR|COLOQUE|POE|POR|PONHA|BOTA|BOTAR|BOTE|MARCA|MARCAR|MARQUE|ESCALA|ESCALAR|INCLUA|ADICIONA|ADICIONAR|CRIA|CRIAR|CRIE)\b/;
 const isDelegatedMarkingText = (body) => delegatedMarkingPattern.test(normalizeMentionLabel(body));
+const delegatedRemovalPattern = /\b(?:RETIRA|RETIRAR|RETIRE|TIRA|TIRAR|TIRE|EXCLUI|EXCLUIR|EXCLUA|EXCLJIR|REMOVE|REMOVER|REMOVA|APAGA|APAGAR|APAGUE)\b/;
+const delegatedRemovalActionPattern = /\b(?:RETIRA|RETIRAR|RETIRE|TIRA|TIRAR|TIRE|EXCLUI|EXCLUIR|EXCLUA|EXCLJIR|REMOVE|REMOVER|REMOVA|APAGA|APAGAR|APAGUE)\b/g;
+const isDelegatedRemovalText = (body) => delegatedRemovalPattern.test(normalizeMentionLabel(body));
+const assignmentChangePattern = /\b(?:TROCA|TROCAR|TROQUE|SUBSTITUI|SUBSTITUIR|SUBSTITUA|PERMUTA|PERMUTAR|PERMUTE|REMANEJA|REMANEJAR|REMANEJE)\b/;
+const remaneuverPattern = /\b(?:REMANEJA|REMANEJAR|REMANEJE)\b/;
+const isAssignmentChangeText = (body) => assignmentChangePattern.test(normalizeMentionLabel(body));
+
+function parseActiveMarkingRequest(text) {
+  const competency = activeCompetency();
+  return parseMarkingRequest(text, {
+    month: competency?.month,
+    year: competency?.year,
+    today: dayjs().format('YYYY-MM-DD')
+  });
+}
+
+function extractDisplayPrefix(value) {
+  const text = String(value ?? '');
+  const matches = [...text.matchAll(/\(([^()]*)\)/g)];
+  if (!matches.length) return { text, displayPrefix: null, error: null };
+  if (matches.length > 1) return { text, displayPrefix: null, error: 'Informe somente uma observação entre parênteses por militar.' };
+  const displayPrefix = matches[0][1].trim().replace(/\s+/g, ' ').replace(/\|/g, '/');
+  if (!displayPrefix || displayPrefix.length > 40) {
+    return { text, displayPrefix: null, error: 'A observação entre parênteses deve ter de 1 a 40 caracteres.' };
+  }
+  return {
+    text: `${text.slice(0, matches[0].index)} ${text.slice(matches[0].index + matches[0][0].length)}`,
+    displayPrefix,
+    error: null
+  };
+}
+
+function multiTargetSegments(socket, message, body, targets) {
+  const structuredMentions = messageContextInfo(message)?.mentionedJid ?? [];
+  const writtenMentions = [...body.matchAll(/@\S+/g)];
+  if (writtenMentions.length !== structuredMentions.length) return null;
+  const targetsByAccount = new Map(targets.map((target) => [jidAccount(target.jid), target.member]));
+  const anchors = [];
+  structuredMentions.forEach((jid, index) => {
+    const member = targetsByAccount.get(jidAccount(jid));
+    const mention = writtenMentions[index];
+    if (member && mention) anchors.push({ member, start: mention.index, end: mention.index + mention[0].length });
+  });
+  if (anchors.length !== targets.length) return null;
+  return anchors.map((anchor, index) => ({
+    member: anchor.member,
+    text: body.slice(anchor.end, anchors[index + 1]?.start ?? body.length)
+  }));
+}
+
+async function assignMultipleMentionedMembers(socket, message, body, targets) {
+  const segments = multiTargetSegments(socket, message, body, targets);
+  if (!segments) return 'Não consegui separar o pedido de cada militar. Nenhuma marcação foi feita. Informe o turno logo depois de cada contato marcado.';
+
+  const planned = [];
+  let inheritedDay = null;
+  for (const segment of segments) {
+    const decorated = extractDisplayPrefix(segment.text);
+    if (decorated.error) return `${decorated.error} Nenhuma marcação foi feita.`;
+    let parsed = parseActiveMarkingRequest(decorated.text);
+    // Em "@Fragoso hoje dia e @Gelson noite", o segundo trecho herda a
+    // mesma data. A herança só é aceita quando o trecho anterior tem um dia.
+    if ((parsed.error || !parsed.choices.length) && inheritedDay) {
+      const inherited = parseActiveMarkingRequest(`${inheritedDay} ${decorated.text}`);
+      if (!inherited.error && inherited.choices.length) parsed = inherited;
+    }
+    if (parsed.error || !parsed.choices.length) {
+      return `Não entendi o dia e o turno de *${segment.member.rank} ${segment.member.operational_name}*. Nenhuma marcação foi feita. Coloque o pedido logo após cada militar.`;
+    }
+    const days = [...new Set(parsed.choices.map((choice) => choice.day))];
+    inheritedDay = days.length === 1 ? days[0] : null;
+    planned.push({ member: segment.member, choices: parsed.choices, displayPrefix: decorated.displayPrefix });
+  }
+
+  const results = [];
+  const mentions = [];
+  for (const item of planned) {
+    const result = await assignNaturalChoices(item.member, item.choices, { displayPrefix: item.displayPrefix });
+    if (result?.type === 'TEXT') {
+      results.push(`*${item.member.rank.toUpperCase()} ${item.member.operational_name.toUpperCase()}*\n${result.text}`);
+      mentions.push(...(result.mentions ?? []));
+    } else {
+      results.push(`*${item.member.rank.toUpperCase()} ${item.member.operational_name.toUpperCase()}*\n${result}`);
+    }
+  }
+  return { type: 'TEXT', text: `*RESULTADO PARA ${planned.length} MILITARES*\n\n${results.join('\n\n')}`, mentions: [...new Set(mentions)] };
+}
 
 function logOutboundMessage(socket, result, remoteJid, body) {
   db.prepare(`INSERT OR IGNORE INTO whatsapp_messages
@@ -404,21 +496,35 @@ export async function handleIncomingMessages(socket, { messages }) {
     const originalIdentity = resolveMemberIdentity(message.key);
     if (!isAddressedToBot(socket, message, body)) continue;
     const directText = withoutBotMention(body);
+    const directDecoration = extractDisplayPrefix(directText);
+    const isDirectJustification = /^\/?\s*JUSTIFI(?:CAR|CA|QUE)\b/.test(normalizeMentionLabel(directText));
+    const unsupportedJustificationMarking = Boolean(directDecoration.displayPrefix && !isDirectJustification);
     const directSelection = parseMarkingRequest(directText);
     const directChoices = directSelection.choices;
     const directTarget = await mentionedMember(socket, message);
+    const multiTargetRequest = directTarget.targets?.length > 1 && isDelegatedMarkingText(directText);
+    const quotedCandidate = quotedMemberRequest(socket, message);
+    const hasDirectMarkingRequest = directChoices.length > 0 || Boolean(directSelection.error)
+      || isDelegatedMarkingText(directText) || isDelegatedRemovalText(directText) || isAssignmentChangeText(directText);
+    // Ao responder a mensagem de um militar, um pedido novo sem outro @militar
+    // usa o autor citado como alvo. Um @militar explícito continua prioritário.
+    const quotedTargetIdentity = !directTarget.required && hasDirectMarkingRequest && quotedCandidate
+      ? await resolveMemberIdentityWithMapping(socket, quotedCandidate.key)
+      : null;
     // A new command takes precedence over a quoted message. Quoting a request
     // and only calling the bot still delegates to the original author.
     const hasDirectRequest = directTarget.required || directChoices.length > 0 || Boolean(directSelection.error)
-      || directText.startsWith('/') || isDelegatedMarkingText(directText);
-    const quotedRequest = hasDirectRequest ? null : quotedMemberRequest(socket, message);
+      || directText.startsWith('/') || isDelegatedMarkingText(directText) || isDelegatedRemovalText(directText)
+      || isAssignmentChangeText(directText);
+    const quotedRequest = hasDirectRequest ? null : quotedCandidate;
     const effectiveBody = quotedRequest?.body ?? body;
     const explicitSlash = effectiveBody.startsWith('/');
     const commandText = withoutBotMention(effectiveBody);
     const identity = quotedRequest
       ? await resolveMemberIdentityWithMapping(socket, quotedRequest.key)
       : (originalIdentity.member ? originalIdentity : await resolveMemberIdentityWithMapping(socket, message.key));
-    const targetMember = quotedRequest ? null : directTarget.member;
+    const targetMember = quotedRequest ? null : (directTarget.member ?? quotedTargetIdentity?.member ?? null);
+    const quotedTargetMissing = Boolean(quotedTargetIdentity && !quotedTargetIdentity.member);
     const senderJid = identity.senderJid;
     if (!senderJid) continue;
     const processedMessageId = messageId;
@@ -427,13 +533,28 @@ export async function handleIncomingMessages(socket, { messages }) {
     console.info(JSON.stringify({ event: 'whatsapp_command', handlerVersion: commandHandlerVersion, pid: process.pid,
       messageId, senderMemberId: originalIdentity.member?.id ?? null,
       targetMemberId: quotedRequest ? identity.member?.id ?? null : targetMember?.id ?? (directTarget.required ? null : identity.member?.id ?? null),
-      source: quotedRequest ? 'QUOTE' : directTarget.source, rejected: Boolean(!quotedRequest && directTarget.error) }));
+      targetMemberIds: directTarget.targets?.length > 1 ? directTarget.targets.map((target) => target.member.id) : undefined,
+      source: quotedRequest ? 'QUOTE' : quotedTargetIdentity ? 'QUOTE_TARGET' : directTarget.source,
+      rejected: Boolean((!quotedRequest && directTarget.error && !multiTargetRequest && !isAssignmentChangeText(directText)) || quotedTargetMissing) }));
     db.prepare('INSERT OR IGNORE INTO whatsapp_messages (message_id,remote_jid,sender_jid,direction,body,created_at) VALUES (?,?,?,?,?,?)')
       .run(processedMessageId, remoteJid, senderJid, 'INBOUND', effectiveBody.slice(0, 2000), now());
     const reply = identity.member
-      ? !quotedRequest && directTarget.error
+      ? unsupportedJustificationMarking
+        ? 'Uma justificativa não cria marcação. Use */justificar @militar dia e turno (motivo)* para alterar uma escala ordinária já existente. Nada foi criado.'
+      : isAssignmentChangeText(directText)
+        ? await changeExtraAssignment(socket, message, body, directText,
+          directTarget.targets?.length ? directTarget.targets : targetMember ? [{ member: targetMember }] : [], identity.member)
+      : multiTargetRequest
+        ? await assignMultipleMentionedMembers(socket, message, body, directTarget.targets)
+        : quotedTargetMissing
+        ? 'O autor da mensagem citada não está cadastrado no efetivo. Nenhuma marcação foi feita.'
+        : !quotedRequest && directTarget.error
         ? directTarget.error
-        : await executeCommand(identity.member, commandText, { explicitSlash, targetMember, requiresTarget: !quotedRequest && directTarget.required })
+        : await executeCommand(identity.member, commandText, {
+          explicitSlash,
+          targetMember,
+          requiresTarget: !quotedRequest && (directTarget.required || Boolean(quotedTargetIdentity))
+        })
       : quotedRequest
         ? 'O autor da mensagem citada não está cadastrado no efetivo.'
         : 'Seu telefone não está cadastrado no efetivo. Peça ao escalante para preencher seu número no painel.';
@@ -576,6 +697,23 @@ O bot responde de cinco formas:
 5. Marcando o bot e o militar que receberá a vaga:
    *@Escalante coloque @militar dia 12 à noite*
    *@Escalante marque @militar dia 12, 24 horas*
+   Para dois: *@Escalante escalar @militar1 hoje dia e @militar2 noite*
+
+Para retirar somente serviços extras:
+   *@Escalante retirar @militar do dia 19, dia*
+   *@Escalante excluir @militar do dia 19, 24h*
+Quando informar apenas o dia, todos os extras desse militar no dia serão retirados.
+
+Para ajustar somente serviços extras:
+   *Trocar militar:* @Escalante troque @militar1 dia 17 noite por @militar2
+   *Permutar horários:* @Escalante permute @militar1 dia 17 noite com @militar2 dia 20 dia
+   *Remanejar:* @Escalante remaneje @militar1 do dia 17 noite para dia 20 dia
+Cada lado da troca deve informar somente um turno. O bot mostra o antes e o depois.
+
+Para justificar uma escala ordinária que já existe:
+   */justificar @militar hoje dia (afastado)*
+   */justificar @militar dia 17 noite (licença)*
+O texto entre parênteses aparece depois do nome. Se a escala ordinária não existir para o militar naquele horário, nada será criado.
 
 Quando informar somente o dia, o sistema marca dia e noite (24 horas).
 
@@ -674,25 +812,41 @@ function nextMonthGenerationWarning() {
 async function executeCommand(member, rawBody, { explicitSlash = false, targetMember = null, requiresTarget = false } = {}) {
   if (requiresTarget && !targetMember) return 'Não identifiquei o militar marcado. Nenhuma marcação foi feita.';
   const commandBody = rawBody.trim().replace(/^\/+/, '').trim();
-  const normalized = commandBody.toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  const decoratedRequest = extractDisplayPrefix(commandBody);
+  if (decoratedRequest.error) return decoratedRequest.error;
+  const normalized = decoratedRequest.text.toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
   const [command, argument] = normalized.split(/\s+/, 2);
   if (['MENU', 'AJUDA', 'COMANDOS'].includes(command)) return commandMenu();
   if (command === 'MESES') return generatedCompetenciesMessage();
-  const parseSelection = (text) => {
-    const competency = activeCompetency();
-    return parseMarkingRequest(text, {
-      month: competency?.month,
-      year: competency?.year,
-      today: dayjs().format('YYYY-MM-DD')
-    });
-  };
+  const parseSelection = parseActiveMarkingRequest;
+  if (['JUSTIFICAR', 'JUSTIFICA', 'JUSTIFIQUE'].includes(command)) {
+    const justifiedMember = targetMember ?? (!requiresTarget ? member : null);
+    if (!justifiedMember) return 'Marque o militar cuja escala será justificada. Exemplo: */justificar @militar hoje dia (afastado)*.';
+    if (!decoratedRequest.displayPrefix) return 'Escreva a justificativa entre parênteses. Exemplo: */justificar @militar hoje dia (afastado)*.';
+    const selection = decoratedRequest.text.replace(/^\s*JUSTIFI(?:CAR|CA|QUE)\b/i, ' ');
+    const parsed = parseSelection(selection);
+    if (parsed.error) return parsed.error;
+    if (!parsed.choices.length) return 'Informe o dia e, se desejar, o turno da escala ordinária que será justificada.';
+    return justifyOrdinaryAssignments(justifiedMember, parsed.choices, decoratedRequest.displayPrefix, member);
+  }
+  if (decoratedRequest.displayPrefix) {
+    return 'Uma justificativa não cria marcação. Use */justificar @militar dia e turno (motivo)* para alterar uma escala ordinária já existente. Nada foi criado.';
+  }
+  const delegatedRemoval = isDelegatedRemovalText(normalized);
+  if (delegatedRemoval) {
+    const selection = normalized.replace(delegatedRemovalActionPattern, ' ');
+    const parsed = parseSelection(selection);
+    if (parsed.error) return parsed.error;
+    if (!parsed.choices.length) return `Informe o dia e, se desejar, o turno que será retirado de *${(targetMember ?? member).rank} ${(targetMember ?? member).operational_name}*. Exemplo: *retirar @militar do dia 19, noite*.`;
+    return removeExtraNaturalChoices(targetMember ?? member, parsed.choices, member);
+  }
   const delegatedAction = isDelegatedMarkingText(normalized);
   const delegatedSelection = parseSelection(normalized);
   if (targetMember && (delegatedAction || (requiresTarget && (delegatedSelection.choices.length > 0 || delegatedSelection.error)))) {
     if (delegatedSelection.error) return delegatedSelection.error;
     const choices = delegatedSelection.choices;
     if (!choices.length) return `Informe o dia e o turno de *${targetMember.rank} ${targetMember.operational_name}*. Exemplo: *coloque @militar dia 12 à noite* ou *dia 12, 24 horas*.`;
-    const result = await assignNaturalChoices(targetMember, choices);
+    const result = await assignNaturalChoices(targetMember, choices, { displayPrefix: decoratedRequest.displayPrefix });
     const heading = `*MARCAÇÃO PARA ${targetMember.rank.toUpperCase()} ${targetMember.operational_name.toUpperCase()}*`;
     return result?.type === 'TEXT'
       ? { ...result, text: `${heading}\n\n${result.text}` }
@@ -723,14 +877,14 @@ async function executeCommand(member, rawBody, { explicitSlash = false, targetMe
     const parsed = parseSelection(selection);
     if (parsed.error) return parsed.error;
     const choices = parsed.choices;
-    if (choices.length) return assignNaturalChoices(member, choices);
+    if (choices.length) return assignNaturalChoices(member, choices, { displayPrefix: decoratedRequest.displayPrefix });
     const result = assignMemberToSlot(member, selection);
     return result.startsWith('Marcação confirmada') ? resultWithNextTurn(member, result) : result;
   }
   const parsed = parseSelection(normalized);
   if (parsed.error) return parsed.error;
   const choices = parsed.choices;
-  if (choices.length) return assignNaturalChoices(member, choices);
+  if (choices.length) return assignNaturalChoices(member, choices, { displayPrefix: decoratedRequest.displayPrefix });
   if (command === 'CANCELAR') return cancelMemberAssignment(member, argument);
   return explicitSlash ? 'Comando não reconhecido. Envie /menu para ver os comandos disponíveis.' : null;
 }
@@ -892,7 +1046,7 @@ function markingTurnMessage() {
 function slotRows(competencyId, { onlyAvailable = false } = {}) {
   return db.prepare(`SELECT s.id,s.service_date,s.period,s.is_majorado,s.current_capacity,s.status,s.homologated_at,s.homologation_deadline,
       COUNT(a.id) AS confirmed_count,
-      (SELECT GROUP_CONCAT(name, ' | ') FROM (SELECT m2.rank || ' ' || m2.operational_name AS name FROM assignments a2 JOIN members m2 ON m2.id=a2.member_id WHERE a2.service_slot_id=s.id AND a2.status='CONFIRMED' ORDER BY a2.position_number)) AS members
+      (SELECT GROUP_CONCAT(name, ' | ') FROM (SELECT m2.rank || ' ' || m2.operational_name || COALESCE(' (' || NULLIF(TRIM(a2.display_prefix),'') || ')', '') AS name FROM assignments a2 JOIN members m2 ON m2.id=a2.member_id WHERE a2.service_slot_id=s.id AND a2.status='CONFIRMED' ORDER BY a2.position_number)) AS members
     FROM service_slots s LEFT JOIN assignments a ON a.service_slot_id=s.id AND a.status='CONFIRMED'
     WHERE s.competency_id=? GROUP BY s.id
     ${onlyAvailable ? "HAVING s.status='OPEN' AND s.homologated_at IS NULL AND confirmed_count<s.current_capacity" : ''}
@@ -990,8 +1144,278 @@ async function vacanciesWithPdf(member) {
   };
 }
 
+function justifyOrdinaryAssignments(targetMember, choices, displayPrefix, requestedBy) {
+  const competency = activeCompetency();
+  if (!competency) return 'Não há competência ativa para registrar a justificativa.';
+  const rows = slotRows(competency.id);
+  const responses = [];
+  let updated = 0;
 
-async function assignNaturalChoices(member, choices) {
+  db.transaction(() => {
+    for (const choice of choices) {
+      const daySlots = rows.filter((row) => Number(dayjs(row.service_date).format('D')) === choice.day);
+      for (const period of choice.periods) {
+        const label = `${String(choice.day).padStart(2, '0')} ${period === 'DIURNO' ? 'dia' : 'noite'}`;
+        const slot = daySlots.find((row) => row.period === period);
+        if (!slot) {
+          responses.push(`${label}: horário inexistente no mês ativo.`);
+          continue;
+        }
+        const assignment = db.prepare(`SELECT * FROM assignments
+          WHERE service_slot_id=? AND member_id=? AND status='CONFIRMED' AND service_type='ORDINARY'`).get(slot.id, targetMember.id);
+        if (!assignment) {
+          responses.push(`${label}: nenhuma escala ordinária encontrada; nada foi criado.`);
+          continue;
+        }
+        db.prepare('UPDATE assignments SET display_prefix=?,updated_at=? WHERE id=?')
+          .run(displayPrefix, now(), assignment.id);
+        audit({ action: 'BOT_ORDINARY_JUSTIFICATION', entityType: 'ASSIGNMENT', entityId: assignment.id,
+          before: assignment, after: db.prepare('SELECT * FROM assignments WHERE id=?').get(assignment.id),
+          reason: `Justificativa registrada por ${requestedBy.rank} ${requestedBy.operational_name}` });
+        updated += 1;
+        responses.push(`${label}: (${displayPrefix}) incluído depois do nome.`);
+      }
+    }
+  })();
+
+  return `*JUSTIFICATIVA — ${targetMember.rank.toUpperCase()} ${targetMember.operational_name.toUpperCase()}*
+
+${responses.join('\n')}
+
+${updated ? `${updated} escala(s) ordinária(s) atualizada(s).` : 'Nenhuma escala foi alterada.'}
+Nenhuma vaga foi criada e nenhuma hora foi acrescentada.`;
+}
+
+function parseSingleChangeChoice(value, { optional = false } = {}) {
+  const decorated = extractDisplayPrefix(String(value ?? '').replace(/\b(?:POR|PARA|COM)\s*$/i, ' '));
+  if (decorated.error) return { error: decorated.error };
+  const parsed = parseActiveMarkingRequest(decorated.text);
+  if (parsed.error) return { error: parsed.error };
+  if (!parsed.choices.length && optional) return { choice: null };
+  if (parsed.choices.length !== 1 || parsed.choices[0].periods.length !== 1) {
+    return { error: 'Informe exatamente um dia e um turno em cada lado da troca. Exemplo: dia 17 noite.' };
+  }
+  return { choice: parsed.choices[0] };
+}
+
+function changeSlot(choice) {
+  const competency = activeCompetency();
+  if (!competency) return null;
+  return db.prepare(`SELECT * FROM service_slots
+    WHERE competency_id=? AND CAST(strftime('%d',service_date) AS INTEGER)=? AND period=?`).get(
+    competency.id, choice.day, choice.periods[0]);
+}
+
+function extraAssignment(member, slot) {
+  if (!slot) return null;
+  return db.prepare(`SELECT * FROM assignments
+    WHERE member_id=? AND service_slot_id=? AND status='CONFIRMED' AND service_type='EXTRAORDINARY'`).get(member.id, slot.id);
+}
+
+function changeDescription(member, slot) {
+  return `${member.rank} ${member.operational_name} — ${dayjs(slot.service_date).format('DD/MM/YYYY')} ${periodLabel(slot.period)}`;
+}
+
+function destinationError(member, slot, ignoredAssignmentId = null) {
+  if (!slot) return 'O horário de destino não existe no mês ativo.';
+  if (!eligible(member)) return `${member.rank} ${member.operational_name} não está ativo e autorizado para marcação.`;
+  if (slot.status !== 'OPEN' || slot.homologated_at) return 'O horário de destino está fechado ou homologado.';
+  if (slot.service_date < dayjs().format('YYYY-MM-DD')) return 'Não é possível alterar um horário já iniciado.';
+  const unavailable = db.prepare(`SELECT 1 FROM unavailabilities
+    WHERE member_id=? AND status='ACTIVE' AND starts_at<=? AND ends_at>=? LIMIT 1`).get(member.id, slot.ends_at, slot.starts_at);
+  if (unavailable) return `${member.rank} ${member.operational_name} possui indisponibilidade no destino.`;
+  const duplicate = db.prepare(`SELECT 1 FROM assignments
+    WHERE service_slot_id=? AND member_id=? AND status='CONFIRMED' AND id<>?`).get(slot.id, member.id, ignoredAssignmentId ?? -1);
+  return duplicate ? `${member.rank} ${member.operational_name} já está marcado no horário de destino.` : null;
+}
+
+function ensureExtraSource(member, choice) {
+  const slot = changeSlot(choice);
+  if (!slot) return { error: 'O horário de origem não existe no mês ativo.' };
+  if (slot.service_date < dayjs().format('YYYY-MM-DD')) return { error: 'Não é possível alterar um horário já iniciado.' };
+  const assignment = extraAssignment(member, slot);
+  if (!assignment) {
+    const ordinary = db.prepare(`SELECT 1 FROM assignments
+      WHERE member_id=? AND service_slot_id=? AND status='CONFIRMED' AND service_type='ORDINARY'`).get(member.id, slot.id);
+    return { error: ordinary
+      ? 'Esse serviço é ordinário e não pode ser alterado pelo grupo.'
+      : `${member.rank} ${member.operational_name} não possui serviço extra nesse horário.` };
+  }
+  return { slot, assignment };
+}
+
+function replaceExtraMember(requestedBy, sourceMember, targetMember, sourceChoice) {
+  if (sourceMember.id === targetMember.id) return 'Informe dois militares diferentes para realizar a troca.';
+  const source = ensureExtraSource(sourceMember, sourceChoice);
+  if (source.error) return source.error;
+  const invalidDestination = destinationError(targetMember, source.slot, source.assignment.id);
+  if (invalidDestination) return invalidDestination;
+  const before = { ...source.assignment };
+  db.prepare('UPDATE assignments SET member_id=?,display_prefix=NULL,updated_at=? WHERE id=?')
+    .run(targetMember.id, now(), source.assignment.id);
+  audit({ action: 'BOT_EXTRA_REPLACE', entityType: 'ASSIGNMENT', entityId: source.assignment.id,
+    before, after: db.prepare('SELECT * FROM assignments WHERE id=?').get(source.assignment.id),
+    reason: `Troca solicitada por ${requestedBy.rank} ${requestedBy.operational_name}` });
+  return `*TROCA REALIZADA*
+
+Antes: ${changeDescription(sourceMember, source.slot)}
+Agora: ${changeDescription(targetMember, source.slot)}
+
+Somente o serviço extra informado foi alterado.`;
+}
+
+function moveExtraAssignment(requestedBy, member, sourceChoice, targetChoice) {
+  const source = ensureExtraSource(member, sourceChoice);
+  if (source.error) return source.error;
+  const targetSlot = changeSlot(targetChoice);
+  if (!targetSlot) return 'O horário de destino não existe no mês ativo.';
+  if (source.slot.id === targetSlot.id) return 'Origem e destino são o mesmo horário. Nenhuma alteração foi feita.';
+  const invalidDestination = destinationError(member, targetSlot, source.assignment.id);
+  if (invalidDestination) return invalidDestination;
+  const occupied = new Set(db.prepare(`SELECT position_number FROM assignments
+    WHERE service_slot_id=? AND status='CONFIRMED'`).all(targetSlot.id).map((item) => Number(item.position_number)));
+  const targetPosition = source.assignment.position_number <= targetSlot.current_capacity
+    && !occupied.has(source.assignment.position_number)
+    ? source.assignment.position_number
+    : Array.from({ length: Number(targetSlot.current_capacity) }, (_, index) => index + 1)
+      .find((position) => !occupied.has(position));
+  if (!targetPosition) return 'O horário de destino não possui vaga livre.';
+  const before = { ...source.assignment };
+  db.prepare('UPDATE assignments SET service_slot_id=?,position_number=?,updated_at=? WHERE id=?')
+    .run(targetSlot.id, targetPosition, now(), source.assignment.id);
+  audit({ action: 'BOT_EXTRA_MOVE', entityType: 'ASSIGNMENT', entityId: source.assignment.id,
+    before, after: db.prepare('SELECT * FROM assignments WHERE id=?').get(source.assignment.id),
+    reason: `Remanejamento solicitado por ${requestedBy.rank} ${requestedBy.operational_name}` });
+  return `*REMANEJAMENTO REALIZADO*
+
+${member.rank} ${member.operational_name}
+Antes: ${dayjs(source.slot.service_date).format('DD/MM/YYYY')} ${periodLabel(source.slot.period)}
+Agora: ${dayjs(targetSlot.service_date).format('DD/MM/YYYY')} ${periodLabel(targetSlot.period)}
+
+A posição de destino é ${targetPosition}.`;
+}
+
+function swapExtraAssignments(requestedBy, firstMember, firstChoice, secondMember, secondChoice) {
+  if (firstMember.id === secondMember.id) return 'Informe dois militares diferentes para realizar a permuta.';
+  const first = ensureExtraSource(firstMember, firstChoice);
+  if (first.error) return first.error;
+  const second = ensureExtraSource(secondMember, secondChoice);
+  if (second.error) return second.error;
+  if (first.slot.id === second.slot.id) return 'Os dois militares já estão no mesmo horário. Nenhuma permuta foi necessária.';
+  const firstDestinationError = destinationError(firstMember, second.slot, first.assignment.id);
+  if (firstDestinationError) return firstDestinationError;
+  const secondDestinationError = destinationError(secondMember, first.slot, second.assignment.id);
+  if (secondDestinationError) return secondDestinationError;
+
+  const stamp = now();
+  db.transaction(() => {
+    db.prepare('UPDATE assignments SET position_number=?,updated_at=? WHERE id=?')
+      .run(-first.assignment.id, stamp, first.assignment.id);
+    db.prepare('UPDATE assignments SET service_slot_id=?,position_number=?,updated_at=? WHERE id=?')
+      .run(first.slot.id, first.assignment.position_number, stamp, second.assignment.id);
+    db.prepare('UPDATE assignments SET service_slot_id=?,position_number=?,updated_at=? WHERE id=?')
+      .run(second.slot.id, second.assignment.position_number, stamp, first.assignment.id);
+  })();
+  audit({ action: 'BOT_EXTRA_SWAP', entityType: 'ASSIGNMENT',
+    entityId: `${first.assignment.id},${second.assignment.id}`,
+    before: { first: first.assignment, second: second.assignment },
+    after: {
+      first: db.prepare('SELECT * FROM assignments WHERE id=?').get(first.assignment.id),
+      second: db.prepare('SELECT * FROM assignments WHERE id=?').get(second.assignment.id)
+    }, reason: `Permuta solicitada por ${requestedBy.rank} ${requestedBy.operational_name}` });
+  return `*PERMUTA REALIZADA*
+
+${firstMember.rank} ${firstMember.operational_name}:
+${dayjs(first.slot.service_date).format('DD/MM/YYYY')} ${periodLabel(first.slot.period)} → ${dayjs(second.slot.service_date).format('DD/MM/YYYY')} ${periodLabel(second.slot.period)}
+
+${secondMember.rank} ${secondMember.operational_name}:
+${dayjs(second.slot.service_date).format('DD/MM/YYYY')} ${periodLabel(second.slot.period)} → ${dayjs(first.slot.service_date).format('DD/MM/YYYY')} ${periodLabel(first.slot.period)}
+
+Somente os dois serviços extras informados foram permutados.`;
+}
+
+async function changeExtraAssignment(socket, message, body, directText, targets, requestedBy) {
+  if (!activeCompetency()) return 'Não há competência ativa para realizar a alteração.';
+  const normalized = normalizeMentionLabel(directText);
+  const isRemaneuver = remaneuverPattern.test(normalized);
+  if (targets.length === 1) {
+    const parts = normalized.split(/\bPARA\b/);
+    if (parts.length !== 2) {
+      return 'Para remanejar, use: *@Escalante remaneje @militar do dia 17 noite para dia 20 dia*.';
+    }
+    const source = parseSingleChangeChoice(parts[0]);
+    if (source.error) return source.error;
+    const destination = parseSingleChangeChoice(parts[1]);
+    if (destination.error) return destination.error;
+    return moveExtraAssignment(requestedBy, targets[0].member, source.choice, destination.choice);
+  }
+  if (targets.length !== 2 || targets.some((target) => !target.member || !target.jid)) {
+    return isRemaneuver
+      ? 'Marque um militar e informe a origem e o destino do remanejamento.'
+      : 'Marque os dois militares da troca. Nenhuma alteração foi feita.';
+  }
+  const segments = multiTargetSegments(socket, message, body, targets);
+  if (!segments) return 'Não consegui separar os dois militares e seus horários. Nenhuma alteração foi feita.';
+  const first = parseSingleChangeChoice(segments[0].text);
+  if (first.error) return first.error;
+  const second = parseSingleChangeChoice(segments[1].text, { optional: true });
+  if (second.error) return second.error;
+  if (!second.choice) {
+    if (/\b(?:PERMUTA|PERMUTAR|PERMUTE)\b/.test(normalized)) {
+      return 'Na permuta, informe também o dia e o turno do segundo militar.';
+    }
+    return replaceExtraMember(requestedBy, segments[0].member, segments[1].member, first.choice);
+  }
+  return swapExtraAssignments(requestedBy, segments[0].member, first.choice, segments[1].member, second.choice);
+}
+
+function removeExtraNaturalChoices(targetMember, choices, requestedBy) {
+  const competency = activeCompetency();
+  if (!competency) return 'Não há uma competência ativa para retirada.';
+  const rows = slotRows(competency.id);
+  const responses = [];
+  const today = dayjs().format('YYYY-MM-DD');
+
+  db.transaction(() => {
+    for (const choice of choices) {
+      const daySlots = rows.filter((row) => Number(dayjs(row.service_date).format('D')) === choice.day);
+      for (const period of choice.periods) {
+        const label = `${String(choice.day).padStart(2, '0')} ${period === 'DIURNO' ? 'dia' : 'noite'}`;
+        const slot = daySlots.find((row) => row.period === period);
+        if (!slot) {
+          responses.push(`${label}: horário inexistente nesta competência.`);
+          continue;
+        }
+        if (slot.service_date < today) {
+          responses.push(`${label}: não é possível retirar um horário já iniciado.`);
+          continue;
+        }
+        const assignments = db.prepare(`SELECT * FROM assignments
+          WHERE service_slot_id=? AND member_id=? AND status='CONFIRMED' AND service_type='EXTRAORDINARY'`).all(slot.id, targetMember.id);
+        if (!assignments.length) {
+          responses.push(`${label}: nenhum serviço extra encontrado.`);
+          continue;
+        }
+        for (const assignment of assignments) {
+          db.prepare("DELETE FROM assignments WHERE id=? AND service_type='EXTRAORDINARY'").run(assignment.id);
+          audit({
+            action: 'BOT_DELEGATED_EXTRA_REMOVAL',
+            entityType: 'ASSIGNMENT',
+            entityId: assignment.id,
+            before: assignment,
+            reason: `Retirada pelo WhatsApp solicitada por ${requestedBy.rank} ${requestedBy.operational_name}`
+          });
+        }
+        responses.push(`${label}: serviço extra retirado.`);
+      }
+    }
+  })();
+
+  return `*RETIRADA PARA ${targetMember.rank.toUpperCase()} ${targetMember.operational_name.toUpperCase()}*\n\n${responses.join('\n')}\n\nSomente serviços extras foram retirados. Serviços ordinários foram preservados.`;
+}
+
+
+async function assignNaturalChoices(member, choices, { displayPrefix = null } = {}) {
   const competency = activeCompetency();
   if (!competency) return 'Não há uma competência ativa para marcação.';
   const turn = currentMarkingTurn();
@@ -1005,7 +1429,7 @@ async function assignNaturalChoices(member, choices) {
     const isFullDay = choice.periods.includes('DIURNO') && choice.periods.includes('NOTURNO');
     const daySlots = rows.filter((row) => Number(dayjs(row.service_date).format('D')) === choice.day);
     if (isFullDay && member.unit_type === 'CICC') {
-      const result = assignFullDayWithBasePreference(member, daySlots);
+      const result = assignFullDayWithBasePreference(member, daySlots, displayPrefix);
       const label = String(choice.day).padStart(2, '0');
       if (result.error) {
         responses.push(`${label}: ${result.error}`);
@@ -1019,7 +1443,7 @@ async function assignNaturalChoices(member, choices) {
       const slot = daySlots.find((row) => row.period === period);
       const label = `${String(choice.day).padStart(2, '0')} ${period === 'DIURNO' ? 'dia' : 'noite'}`;
       if (!slot) { responses.push(`${label}: não existe nesta competência.`); continue; }
-      const result = assignMemberToSlot(member, slot.id);
+      const result = assignMemberToSlot(member, slot.id, displayPrefix);
       if (result.startsWith('Marcação confirmada')) confirmed = true;
       responses.push(result.startsWith('Marcação confirmada') ? `${label}: confirmado.` : `${label}: ${result}`);
     }
@@ -1103,7 +1527,7 @@ function hourSummary(markedHours, hourLimit) {
   return hourLimit === null ? 'Não contabilizadas (sem limite)' : `${markedHours}h / ${hourLimit}h`;
 }
 
-function assignFullDayWithBasePreference(member, rawSlots) {
+function assignFullDayWithBasePreference(member, rawSlots, displayPrefix = null) {
   if (!eligible(member)) return { error: 'Sua situação atual não permite marcação.' };
   const slots = ['DIURNO', 'NOTURNO'].map((period) => rawSlots.find((slot) => slot.period === period));
   if (slots.some((slot) => !slot)) return { error: 'não existem os dois turnos nesta competência.' };
@@ -1185,9 +1609,9 @@ function assignFullDayWithBasePreference(member, rawSlots) {
       if (ownAssignments.find((assignment) => assignment?.service_slot_id === slot.id)) continue;
       const protocol = `BOT-24H-${Date.now()}-${member.id}-${slot.id}`;
       db.prepare(`INSERT INTO assignments
-        (service_slot_id,position_number,member_id,service_type,status,protocol,confirmed_at,created_at,updated_at)
-        VALUES (?,?,?,?,?,?,?,?,?)`)
-        .run(slot.id, selected.position, member.id, 'EXTRAORDINARY', 'CONFIRMED', protocol, stamp, stamp, stamp);
+        (service_slot_id,position_number,member_id,service_type,status,display_prefix,protocol,confirmed_at,created_at,updated_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?)`)
+        .run(slot.id, selected.position, member.id, 'EXTRAORDINARY', 'CONFIRMED', displayPrefix, protocol, stamp, stamp, stamp);
       inserted += 1;
     }
     audit({
@@ -1201,7 +1625,7 @@ function assignFullDayWithBasePreference(member, rawSlots) {
   })();
 }
 
-function assignMemberToSlot(member, rawSlotId) {
+function assignMemberToSlot(member, rawSlotId, displayPrefix = null) {
   const slotId = Number(rawSlotId);
   if (!Number.isInteger(slotId) || slotId < 1) return 'Informe os dias desejados. Exemplo: /marcar 04; 05 noite';
   if (!eligible(member)) return 'Sua situação atual não permite marcação. Consulte STATUS ou fale com o escalante.';
@@ -1228,7 +1652,7 @@ function assignMemberToSlot(member, rawSlotId) {
       .find((candidate) => !occupiedPositions.has(candidate));
     if (!position) return { error: 'Esta vaga não possui mais uma posição livre.' };
     const protocol = `BOT-${Date.now()}-${member.id}-${slot.id}`;
-    db.prepare(`INSERT INTO assignments (service_slot_id,position_number,member_id,service_type,status,protocol,confirmed_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)`).run(slot.id, position, member.id, 'EXTRAORDINARY', 'CONFIRMED', protocol, now(), now(), now());
+    db.prepare(`INSERT INTO assignments (service_slot_id,position_number,member_id,service_type,status,display_prefix,protocol,confirmed_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)`).run(slot.id, position, member.id, 'EXTRAORDINARY', 'CONFIRMED', displayPrefix, protocol, now(), now(), now());
     audit({ memberId: member.id, action: 'BOT_ASSIGNMENT', entityType: 'ASSIGNMENT', entityId: protocol, after: { slotId: slot.id, position }, reason: 'Marcação por WhatsApp' });
     return { slot, protocol, markedHours: markedHours + 12, hourLimit };
   })();

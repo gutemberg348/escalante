@@ -69,6 +69,19 @@ async function receive(text, mentionedJid = [bot, alex], extraContext = {}) {
 function assignedIds() {
   return db.prepare("SELECT member_id FROM assignments WHERE status='CONFIRMED' ORDER BY service_slot_id").all().map(row => row.member_id);
 }
+let assignmentSequence = 0;
+function addConfirmedAssignment({ memberId = 18, day = 20, period = 'NOTURNO', serviceType = 'ORDINARY', displayPrefix = null }) {
+  const serviceDate = `${futureYear}-09-${String(day).padStart(2, '0')}`;
+  const slot = db.prepare('SELECT id FROM service_slots WHERE competency_id=? AND service_date=? AND period=?')
+    .get(competency.id, serviceDate, period);
+  const occupied = new Set(db.prepare("SELECT position_number FROM assignments WHERE service_slot_id=? AND status='CONFIRMED'")
+    .all(slot.id).map((item) => item.position_number));
+  const position = [1, 2, 3, 4].find((candidate) => !occupied.has(candidate));
+  db.prepare(`INSERT INTO assignments
+    (service_slot_id,position_number,member_id,service_type,status,display_prefix,protocol,confirmed_at,created_at,updated_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?)`).run(slot.id, position, memberId, serviceType, 'CONFIRMED', displayPrefix,
+    `TEST-ASSIGNMENT-${++assignmentSequence}`, stamp, stamp, stamp);
+}
 const phrase = '@Escalante marque @Alex Bombeiro no dia 20, 24 horas';
 
 test('direct PN mention records both shifts for Alex, never the sender', async () => {
@@ -174,6 +187,202 @@ test('a polite 12-hour request using today books only the daytime shift', async 
     JOIN service_slots s ON s.id=a.service_slot_id`).all(), [
     { member_id: 1, service_date: currentDate, period: 'DIURNO' }
   ]);
+});
+
+test('text in parentheses without justificar never creates a marking', async () => {
+  await receive('@Escalante @Alex no dia 20, noite (licença)');
+
+  assert.deepEqual(assignedIds(), []);
+  assert.match(replies[0].text, /não cria marcação/i);
+});
+
+test('/justificar updates the existing ordinary shifts without creating assignments', async () => {
+  addConfirmedAssignment({ period: 'DIURNO' });
+  addConfirmedAssignment({ period: 'NOTURNO' });
+
+  await receive('/justificar @Alex no dia 20 (afastado)', [alex]);
+
+  assert.deepEqual(db.prepare(`SELECT a.display_prefix,a.service_type,s.period FROM assignments a
+    JOIN service_slots s ON s.id=a.service_slot_id ORDER BY s.period`).all(), [
+    { display_prefix: 'afastado', service_type: 'ORDINARY', period: 'DIURNO' },
+    { display_prefix: 'afastado', service_type: 'ORDINARY', period: 'NOTURNO' }
+  ]);
+  assert.match(replies[0].text, /Nenhuma vaga foi criada/);
+});
+
+test('/marcar with a justification redirects to /justificar without creating a service', async () => {
+  await receive('/marcar @Alex no dia 20 (afastado)', [alex]);
+
+  assert.deepEqual(assignedIds(), []);
+  assert.match(replies[0].text, /use ´?\*?\/justificar/i);
+});
+
+test('/justificar does nothing when the ordinary assignment does not exist', async () => {
+  await receive('/justificar @Alex no dia 20 noite (afastado)', [alex]);
+
+  assert.deepEqual(assignedIds(), []);
+  assert.match(replies[0].text, /nenhuma escala ordinária encontrada/i);
+  assert.match(replies[0].text, /Nenhuma vaga foi criada/);
+});
+
+test('/justificar never labels an extraordinary assignment', async () => {
+  addConfirmedAssignment({ period: 'NOTURNO', serviceType: 'EXTRAORDINARY' });
+
+  await receive('/justificar @Alex no dia 20 noite (afastado)', [alex]);
+
+  assert.deepEqual(db.prepare('SELECT service_type,display_prefix FROM assignments').all(), [
+    { service_type: 'EXTRAORDINARY', display_prefix: null }
+  ]);
+  assert.match(replies[0].text, /nenhuma escala ordinária encontrada/i);
+});
+
+test('a label in a quoted request is applied to the quoted member', async () => {
+  addConfirmedAssignment({ period: 'NOTURNO' });
+  await receive('@Escalante', [bot], {
+    participant: alex,
+    quotedMessage: { conversation: 'justificar dia 20 noite (licença médica)' }
+  });
+
+  assert.deepEqual(db.prepare(`SELECT a.member_id,a.display_prefix,s.period FROM assignments a
+    JOIN service_slots s ON s.id=a.service_slot_id`).all(), [
+    { member_id: 18, display_prefix: 'licença médica', period: 'NOTURNO' }
+  ]);
+});
+
+test('a new labeled request in a reply targets the quoted member', async () => {
+  addConfirmedAssignment({ period: 'NOTURNO' });
+  await receive('@Escalante justificar no dia 20 noite (licença)', [bot], {
+    participant: alex,
+    quotedMessage: { conversation: 'Preciso ficar fora da escala.' }
+  });
+
+  assert.deepEqual(db.prepare(`SELECT a.member_id,a.display_prefix,s.period FROM assignments a
+    JOIN service_slots s ON s.id=a.service_slot_id`).all(), [
+    { member_id: 18, display_prefix: 'licença', period: 'NOTURNO' }
+  ]);
+});
+
+test('one message can book two mentioned members in different shifts today', async () => {
+  const current = new Date();
+  const currentDate = [
+    current.getFullYear(),
+    String(current.getMonth() + 1).padStart(2, '0'),
+    String(current.getDate()).padStart(2, '0')
+  ].join('-');
+  const { competency: currentCompetency } = ensureCompetencySchedule(`${currentDate.slice(0, 7)}-01`);
+  db.prepare('UPDATE competencies SET generated_at=? WHERE id=?').run(stamp, currentCompetency.id);
+  setting.run('bot_active_competency_id', String(currentCompetency.id), stamp);
+
+  await receive('/@1Escalante escalar @Sgt Fragoso hoje 12 horas dia e @Gelson 12 horas noite', [bot, alex, other]);
+
+  assert.deepEqual(db.prepare(`SELECT a.member_id,s.service_date,s.period FROM assignments a
+    JOIN service_slots s ON s.id=a.service_slot_id ORDER BY s.period`).all(), [
+    { member_id: 18, service_date: currentDate, period: 'DIURNO' },
+    { member_id: 19, service_date: currentDate, period: 'NOTURNO' }
+  ]);
+  assert.match(replies[0].text, /RESULTADO PARA 2 MILITARES/);
+});
+
+test('retirar a daytime shift removes only that extra shift from the mentioned member', async () => {
+  await receive('@Escalante marque @Alex no dia 20, 24 horas');
+  await receive('@Escalante retirar @Alex do dia 20, dia');
+
+  assert.deepEqual(db.prepare(`SELECT a.member_id,a.service_type,s.period FROM assignments a
+    JOIN service_slots s ON s.id=a.service_slot_id ORDER BY s.period`).all(), [
+    { member_id: 18, service_type: 'EXTRAORDINARY', period: 'NOTURNO' }
+  ]);
+  assert.match(replies.at(-1).text, /20 dia: serviço extra retirado/i);
+});
+
+test('tirar with only a date removes every extra shift on that date', async () => {
+  await receive('@Escalante marque @Alex no dia 20, 24 horas');
+  await receive('@Escalante tirar @Alex do dia 20');
+
+  assert.deepEqual(assignedIds(), []);
+  assert.match(replies.at(-1).text, /20 dia: serviço extra retirado/i);
+  assert.match(replies.at(-1).text, /20 noite: serviço extra retirado/i);
+});
+
+test('excluir by date never removes an ordinary service', async () => {
+  const slot = db.prepare("SELECT id FROM service_slots WHERE competency_id=? AND service_date=? AND period='DIURNO'")
+    .get(competency.id, `${futureYear}-09-20`);
+  db.prepare(`INSERT INTO assignments
+    (service_slot_id,position_number,member_id,service_type,status,protocol,confirmed_at,created_at,updated_at)
+    VALUES (?,?,?,?,?,?,?,?,?)`).run(slot.id, 1, 18, 'ORDINARY', 'CONFIRMED', 'ORDINARY-PRESERVED', stamp, stamp, stamp);
+
+  await receive('@Escalante marque @Alex do dia 20, noite');
+  await receive('@Escalante excluir @Alex do dia 20, 24hrs');
+
+  assert.deepEqual(db.prepare('SELECT member_id,service_type,protocol FROM assignments').all(), [
+    { member_id: 18, service_type: 'ORDINARY', protocol: 'ORDINARY-PRESERVED' }
+  ]);
+  assert.match(replies.at(-1).text, /serviços ordinários foram preservados/i);
+});
+
+test('criar is accepted as a synonym for marking another member', async () => {
+  await receive('@Escalante crie @Alex no dia 20 noite', [bot, alex]);
+
+  assert.deepEqual(db.prepare(`SELECT a.member_id,s.period FROM assignments a
+    JOIN service_slots s ON s.id=a.service_slot_id`).all(), [
+    { member_id: 18, period: 'NOTURNO' }
+  ]);
+});
+
+test('trocar replaces one extra member and reports the result', async () => {
+  await receive('@Escalante marque @Alex no dia 20 noite', [bot, alex]);
+  await receive('@Escalante troque @Alex dia 20 noite por @Outro', [bot, alex, other]);
+
+  assert.deepEqual(db.prepare(`SELECT a.member_id,a.service_type,s.period FROM assignments a
+    JOIN service_slots s ON s.id=a.service_slot_id`).all(), [
+    { member_id: 19, service_type: 'EXTRAORDINARY', period: 'NOTURNO' }
+  ]);
+  assert.match(replies.at(-1).text, /TROCA REALIZADA/);
+  assert.match(replies.at(-1).text, /Antes: Sgt Alex/);
+  assert.match(replies.at(-1).text, /Agora: Sgt Outro/);
+});
+
+test('permutar swaps two extra assignments and reports both movements', async () => {
+  await receive('@Escalante marque @Alex no dia 20 noite', [bot, alex]);
+  await receive('@Escalante marque @Outro no dia 21 dia', [bot, other]);
+  await receive('@Escalante permute @Alex dia 20 noite com @Outro dia 21 dia', [bot, alex, other]);
+
+  assert.deepEqual(db.prepare(`SELECT a.member_id,s.service_date,s.period FROM assignments a
+    JOIN service_slots s ON s.id=a.service_slot_id ORDER BY a.member_id`).all(), [
+    { member_id: 18, service_date: `${futureYear}-09-21`, period: 'DIURNO' },
+    { member_id: 19, service_date: `${futureYear}-09-20`, period: 'NOTURNO' }
+  ]);
+  assert.match(replies.at(-1).text, /PERMUTA REALIZADA/);
+  assert.match(replies.at(-1).text, /Sgt Alex/);
+  assert.match(replies.at(-1).text, /Sgt Outro/);
+});
+
+test('remanejar moves one extra assignment and keeps its parenthetical label', async () => {
+  await receive('@Escalante marque @Alex no dia 20 noite', [bot, alex]);
+  db.prepare("UPDATE assignments SET display_prefix='licença'").run();
+  await receive('@Escalante remaneje @Alex do dia 20 noite para dia 21 dia', [bot, alex]);
+
+  assert.deepEqual(db.prepare(`SELECT a.member_id,a.display_prefix,s.service_date,s.period FROM assignments a
+    JOIN service_slots s ON s.id=a.service_slot_id`).all(), [
+    { member_id: 18, display_prefix: 'licença', service_date: `${futureYear}-09-21`, period: 'DIURNO' }
+  ]);
+  assert.match(replies.at(-1).text, /REMANEJAMENTO REALIZADO/);
+  assert.match(replies.at(-1).text, /Antes:/);
+  assert.match(replies.at(-1).text, /Agora:/);
+});
+
+test('a group exchange command never changes an ordinary assignment', async () => {
+  const slot = db.prepare("SELECT id FROM service_slots WHERE competency_id=? AND service_date=? AND period='NOTURNO'")
+    .get(competency.id, `${futureYear}-09-20`);
+  db.prepare(`INSERT INTO assignments
+    (service_slot_id,position_number,member_id,service_type,status,protocol,confirmed_at,created_at,updated_at)
+    VALUES (?,?,?,?,?,?,?,?,?)`).run(slot.id, 1, 18, 'ORDINARY', 'CONFIRMED', 'ORDINARY-NOT-REPLACED', stamp, stamp, stamp);
+
+  await receive('@Escalante troque @Alex dia 20 noite por @Outro', [bot, alex, other]);
+
+  assert.deepEqual(db.prepare('SELECT member_id,service_type,protocol FROM assignments').all(), [
+    { member_id: 18, service_type: 'ORDINARY', protocol: 'ORDINARY-NOT-REPLACED' }
+  ]);
+  assert.match(replies.at(-1).text, /ordinário/i);
 });
 
 for (const [suffix, expectedPeriods] of [

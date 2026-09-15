@@ -61,7 +61,7 @@ CREATE TABLE IF NOT EXISTS capacity_changes (
 CREATE TABLE IF NOT EXISTS assignments (
  id INTEGER PRIMARY KEY AUTOINCREMENT, service_slot_id INTEGER NOT NULL, position_number INTEGER NOT NULL,
  member_id INTEGER NOT NULL, service_type TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'CONFIRMED',
- protocol TEXT NOT NULL UNIQUE, confirmed_at TEXT NOT NULL, cancelled_at TEXT, created_at TEXT NOT NULL,
+ display_prefix TEXT, protocol TEXT NOT NULL UNIQUE, confirmed_at TEXT NOT NULL, cancelled_at TEXT, created_at TEXT NOT NULL,
  updated_at TEXT NOT NULL, FOREIGN KEY(service_slot_id) REFERENCES service_slots(id),
  FOREIGN KEY(member_id) REFERENCES members(id), UNIQUE(service_slot_id, position_number)
 );

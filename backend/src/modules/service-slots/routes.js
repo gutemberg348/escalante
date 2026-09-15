@@ -36,7 +36,7 @@ function eligibleMember(memberId) {
 function scheduleRows(competencyId) {
   return db.prepare(`SELECT s.id,s.service_date,s.period,s.is_majorado,s.current_capacity,s.status,s.homologated_at,s.homologation_deadline,
       COUNT(a.id) AS confirmed_count,
-      (SELECT GROUP_CONCAT(name, ' | ') FROM (SELECT m2.rank || ' ' || m2.operational_name AS name
+      (SELECT GROUP_CONCAT(name, ' | ') FROM (SELECT m2.rank || ' ' || m2.operational_name || COALESCE(' (' || NULLIF(TRIM(a2.display_prefix),'') || ')', '') AS name
         FROM assignments a2 JOIN members m2 ON m2.id=a2.member_id
         WHERE a2.service_slot_id=s.id AND a2.status='CONFIRMED' ORDER BY a2.position_number)) AS members
     FROM service_slots s LEFT JOIN assignments a ON a.service_slot_id=s.id AND a.status='CONFIRMED'
@@ -77,11 +77,11 @@ router.get('/', (req, res) => {
 router.get('/confirmations', allow('ADMIN', 'SCHEDULER'), (req, res, next) => {
   try {
     const input = z.object({ competency_id: z.coerce.number().int().positive(), service_date: z.string().date() }).parse(req.query);
-    const items = db.prepare(`SELECT a.id assignment_id,a.position_number,s.period,s.starts_at,s.ends_at,m.rank,m.operational_name
+    const items = db.prepare(`SELECT a.id assignment_id,a.position_number,a.display_prefix,s.period,s.starts_at,s.ends_at,m.rank,m.operational_name
       FROM assignments a JOIN service_slots s ON s.id=a.service_slot_id JOIN members m ON m.id=a.member_id
       WHERE s.competency_id=? AND s.service_date=? AND a.status='CONFIRMED'
       ORDER BY CASE s.period WHEN 'DIURNO' THEN 0 ELSE 1 END,a.position_number`).all(input.competency_id, input.service_date)
-      .map((item) => ({ assignmentId: item.assignment_id, positionNumber: item.position_number, period: item.period, startsAt: item.starts_at, endsAt: item.ends_at, rank: item.rank, operationalName: item.operational_name }));
+      .map((item) => ({ assignmentId: item.assignment_id, positionNumber: item.position_number, displayPrefix: item.display_prefix, period: item.period, startsAt: item.starts_at, endsAt: item.ends_at, rank: item.rank, operationalName: item.operational_name }));
     res.json({ items });
   } catch (error) { next(error); }
 });
@@ -95,7 +95,7 @@ router.get('/manage', (req, res, next) => {
     const competencyId = z.coerce.number().int().positive().parse(req.query.competency_id);
     const competency = db.prepare('SELECT id,name,year,month,status,generated_at FROM competencies WHERE id=? AND generated_at IS NOT NULL').get(competencyId);
     if (!competency) return res.status(404).json({ message: 'Mês da escala não encontrado.' });
-    const slots = db.prepare(`SELECT s.*,a.id AS assignment_id,a.position_number,a.member_id,a.service_type,m.rank,m.operational_name
+    const slots = db.prepare(`SELECT s.*,a.id AS assignment_id,a.position_number,a.member_id,a.service_type,a.display_prefix,m.rank,m.operational_name
       FROM service_slots s
       LEFT JOIN assignments a ON a.service_slot_id=s.id AND a.status='CONFIRMED'
       LEFT JOIN members m ON m.id=a.member_id
@@ -104,12 +104,12 @@ router.get('/manage', (req, res, next) => {
     const items = new Map();
     for (const row of slots) {
       if (!items.has(row.id)) {
-        const { assignment_id, position_number, member_id, service_type, rank, operational_name, ...slot } = row;
+        const { assignment_id, position_number, member_id, service_type, display_prefix, rank, operational_name, ...slot } = row;
         items.set(row.id, { ...slot, assignments: [] });
       }
       if (row.assignment_id) items.get(row.id).assignments.push({
         id: row.assignment_id, positionNumber: row.position_number, memberId: row.member_id,
-        rank: row.rank, operationalName: row.operational_name, serviceType: row.service_type
+        rank: row.rank, operationalName: row.operational_name, serviceType: row.service_type, displayPrefix: row.display_prefix
       });
     }
     res.json({ competency, items: [...items.values()] });
@@ -150,7 +150,7 @@ router.put('/:slotId/positions/:positionNumber', allow('ADMIN', 'SCHEDULER'), (r
     if (duplicate) return res.status(409).json({ message: 'Este militar já está confirmado neste turno.' });
     let assignment;
     if (existing) {
-      db.prepare('UPDATE assignments SET member_id=?,service_type=COALESCE(?,service_type),updated_at=? WHERE id=?').run(memberId, serviceType || null, now(), existing.id);
+      db.prepare('UPDATE assignments SET member_id=?,service_type=COALESCE(?,service_type),display_prefix=NULL,updated_at=? WHERE id=?').run(memberId, serviceType || null, now(), existing.id);
       assignment = db.prepare('SELECT * FROM assignments WHERE id=?').get(existing.id);
       audit({ userId: req.user.id, action: 'MANUAL_ASSIGNMENT_REPLACE', entityType: 'ASSIGNMENT', entityId: existing.id, before: existing, after: assignment, req });
     } else {

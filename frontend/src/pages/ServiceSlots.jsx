@@ -107,7 +107,7 @@ export default function ServiceSlots() {
   const openSettings = () => {
     const allThird = dates.length > 0 && dates.every((date) => dayColumns[date]?.includes(3));
     const allFourth = dates.length > 0 && dates.every((date) => dayColumns[date]?.includes(4));
-    setScope('MONTH'); setSelectedDates(dates); setColumns({ third: allThird, fourth: allFourth }); setSettingsOpen(true);
+    setScope('MONTH'); setSelectedDates([]); setColumns({ third: allThird, fourth: allFourth }); setSettingsOpen(true);
   };
   const applySettings = () => {
     const targets = scope === 'MONTH' ? dates : selectedDates;
@@ -153,7 +153,7 @@ export default function ServiceSlots() {
     {settingsOpen && <div className="modal-backdrop" role="presentation"><section className="edit-modal month-settings-modal" role="dialog" aria-modal="true" aria-label="Configurações das colunas">
       <div className="modal-header"><div><span className="eyebrow">COLUNAS DA ESCALA</span><h2>{selectedCompetency?.name}</h2></div><button className="close-button" onClick={() => setSettingsOpen(false)} aria-label="Fechar">×</button></div>
       <p className="modal-copy">A 1ª e a 2ª posições permanecem abertas. Liberar a 3ª ou a 4ª inicia uma nova fila, envia o cronograma e publica as vagas no grupo.</p>
-      <div className="settings-choice"><button type="button" className={scope === 'MONTH' ? 'selected' : 'secondary-button'} onClick={() => { setScope('MONTH'); setSelectedDates(dates); }}>Mês inteiro</button><button type="button" className={scope === 'DATES' ? 'selected' : 'secondary-button'} onClick={() => setScope('DATES')}>Dias específicos</button></div>
+      <div className="settings-choice"><button type="button" className={scope === 'MONTH' ? 'selected' : 'secondary-button'} onClick={() => setScope('MONTH')}>Mês inteiro</button><button type="button" className={scope === 'DATES' ? 'selected' : 'secondary-button'} onClick={() => { setScope('DATES'); setSelectedDates([]); }}>Dias específicos</button></div>
       <div className="column-toggles"><label><input type="checkbox" checked={columns.third} onChange={(event) => setColumns((current) => ({ ...current, third: event.target.checked, fourth: event.target.checked ? current.fourth : false }))} /> Liberar 3ª coluna</label><label><input type="checkbox" checked={columns.fourth} onChange={(event) => setColumns((current) => ({ ...current, fourth: event.target.checked, third: event.target.checked || current.third }))} /> Liberar 4ª coluna</label></div>
       {scope === 'DATES' && <div className="date-picker-grid">{dates.map((date) => <label key={date} className={selectedDates.includes(date) ? 'chosen' : ''}><input type="checkbox" checked={selectedDates.includes(date)} onChange={() => toggleDate(date)} /> {dateLabel(date)}</label>)}</div>}
       <div className="form-actions"><button type="button" className="secondary-button" onClick={() => setSettingsOpen(false)}>Cancelar</button><button type="button" disabled={saveColumns.isPending || (scope === 'DATES' && !selectedDates.length)} onClick={applySettings}>Salvar e aplicar</button></div>
@@ -162,7 +162,7 @@ export default function ServiceSlots() {
 
     {confirmationDate && <div className="modal-backdrop" role="presentation"><section className="edit-modal confirmations-modal" role="dialog" aria-modal="true" aria-label="Confirmados do dia">
       <div className="modal-header"><div><span className="eyebrow">ESCALA CONFIRMADA</span><h2>{dateLabel(confirmationDate)}</h2></div><button className="close-button" onClick={() => setConfirmationDate(null)} aria-label="Fechar">×</button></div>
-      {confirmationsLoading ? <p className="modal-copy">Carregando confirmados...</p> : <><p className="modal-copy">Militares confirmados em cada posição dos turnos.</p><div className="confirmation-list">{confirmations?.items?.map((item) => <div className="confirmation-row" key={item.assignmentId}><span>{periodLabel(item.period)}</span><strong>{item.rank} {item.operationalName}</strong><small>Posição {item.positionNumber}</small></div>)}</div>{!confirmations?.items?.length && <p className="empty-table">Ainda não há militar confirmado nesta data.</p>}</>}
+      {confirmationsLoading ? <p className="modal-copy">Carregando confirmados...</p> : <><p className="modal-copy">Militares confirmados em cada posição dos turnos.</p><div className="confirmation-list">{confirmations?.items?.map((item) => <div className="confirmation-row" key={item.assignmentId}><span>{periodLabel(item.period)}</span><strong>{item.rank} {item.operationalName}{item.displayPrefix ? ` (${item.displayPrefix})` : ''}</strong><small>Posição {item.positionNumber}</small></div>)}</div>{!confirmations?.items?.length && <p className="empty-table">Ainda não há militar confirmado nesta data.</p>}</>}
     </section></div>}
   </>;
 }

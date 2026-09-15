@@ -47,7 +47,7 @@ export function saveAutomationSettings(input, userId) {
 
 function scheduleRows(competencyId, empty = false) {
   return db.prepare(`SELECT s.*,COUNT(a.id) confirmed_count,
-      (SELECT GROUP_CONCAT(name, ' | ') FROM (SELECT m.rank || ' ' || m.operational_name name
+      (SELECT GROUP_CONCAT(name, ' | ') FROM (SELECT m.rank || ' ' || m.operational_name || COALESCE(' (' || NULLIF(TRIM(a2.display_prefix),'') || ')', '') name
        FROM assignments a2 JOIN members m ON m.id=a2.member_id WHERE a2.service_slot_id=s.id
        AND a2.status='CONFIRMED' ORDER BY a2.position_number)) members
     FROM service_slots s LEFT JOIN assignments a ON a.service_slot_id=s.id AND a.status='CONFIRMED'
@@ -162,10 +162,10 @@ function tomorrowScheduleMessage(serviceDate) {
     ORDER BY CASE period WHEN 'DIURNO' THEN 0 ELSE 1 END`).all(serviceDate);
   if (!slots.length) return `*ESCALA DE AMANHÃ — ${dayjs(serviceDate).format('DD/MM/YYYY')}*\n\nNenhum horário cadastrado.`;
   const sections = slots.map((slot) => {
-    const assignments = db.prepare(`SELECT a.position_number,m.rank,m.operational_name
+    const assignments = db.prepare(`SELECT a.position_number,a.display_prefix,m.rank,m.operational_name
       FROM assignments a JOIN members m ON m.id=a.member_id
       WHERE a.service_slot_id=? AND a.status='CONFIRMED' ORDER BY a.position_number`).all(slot.id);
-    const names = new Map(assignments.map((assignment) => [assignment.position_number, `${assignment.rank} ${assignment.operational_name}`]));
+    const names = new Map(assignments.map((assignment) => [assignment.position_number, `${assignment.rank} ${assignment.operational_name}${assignment.display_prefix ? ` (${assignment.display_prefix})` : ''}`]));
     const lines = Array.from({ length: slot.current_capacity }, (_, index) => `${index + 1}. ${names.get(index + 1) ?? 'VAGA'}`);
     const period = slot.period === 'DIURNO' ? 'DIA — 07h às 19h' : 'NOITE — 19h às 07h';
     return `*${period}*\n${lines.join('\n')}`;

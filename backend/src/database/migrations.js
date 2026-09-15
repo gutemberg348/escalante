@@ -256,6 +256,15 @@ const migrations = [
           ON assignments(service_slot_id,member_id)
           WHERE status='CONFIRMED';`);
     }
+  },
+  {
+    version: '015_assignment_display_prefix',
+    apply() {
+      const columns = db.prepare('PRAGMA table_info(assignments)').all();
+      if (!columns.some((column) => column.name === 'display_prefix')) {
+        db.exec('ALTER TABLE assignments ADD COLUMN display_prefix TEXT');
+      }
+    }
   }
 ];
 
