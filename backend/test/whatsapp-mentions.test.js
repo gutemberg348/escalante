@@ -194,7 +194,6 @@ test('direct parenthetical justification never creates a marking when no ordinar
 
   assert.deepEqual(assignedIds(), []);
   assert.match(replies[0].text, /nenhuma escala ordinária encontrada/i);
-  assert.match(replies[0].text, /Nenhuma vaga foi criada/i);
 });
 
 test('/justificar updates the existing ordinary shifts without creating assignments', async () => {
@@ -208,7 +207,7 @@ test('/justificar updates the existing ordinary shifts without creating assignme
     { display_prefix: 'afastado', service_type: 'ORDINARY', period: 'DIURNO' },
     { display_prefix: 'afastado', service_type: 'ORDINARY', period: 'NOTURNO' }
   ]);
-  assert.match(replies[0].text, /Nenhuma vaga foi criada/);
+  assert.equal(replies[0].text, `*JUSTIFICATIVA REGISTRADA*\nData: 20/09/${futureYear}\nMilitar: Sgt Alex`);
 });
 
 test('bot and military mentions with date, shift and parentheses justify an existing ordinary assignment', async () => {
@@ -219,7 +218,7 @@ test('bot and military mentions with date, shift and parentheses justify an exis
   assert.deepEqual(db.prepare('SELECT member_id,service_type,display_prefix FROM assignments').all(), [
     { member_id: 18, service_type: 'ORDINARY', display_prefix: 'LICENÇA' }
   ]);
-  assert.match(replies[0].text, /incluído depois do nome/i);
+  assert.equal(replies[0].text, `*JUSTIFICATIVA REGISTRADA*\nData: 20/09/${futureYear}\nMilitar: Sgt Alex`);
 });
 
 test('/marcar with a justification redirects to /justificar without creating a service', async () => {
@@ -234,7 +233,6 @@ test('/justificar does nothing when the ordinary assignment does not exist', asy
 
   assert.deepEqual(assignedIds(), []);
   assert.match(replies[0].text, /nenhuma escala ordinária encontrada/i);
-  assert.match(replies[0].text, /Nenhuma vaga foi criada/);
 });
 
 test('/justificar never labels an extraordinary assignment', async () => {

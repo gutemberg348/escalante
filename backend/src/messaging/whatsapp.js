@@ -1196,42 +1196,34 @@ function justifyOrdinaryAssignments(targetMember, choices, displayPrefix, reques
   const competency = activeCompetency();
   if (!competency) return 'Não há competência ativa para registrar a justificativa.';
   const rows = slotRows(competency.id);
-  const responses = [];
   let updated = 0;
 
   db.transaction(() => {
     for (const choice of choices) {
       const daySlots = rows.filter((row) => Number(dayjs(row.service_date).format('D')) === choice.day);
       for (const period of choice.periods) {
-        const label = `${String(choice.day).padStart(2, '0')} ${period === 'DIURNO' ? 'dia' : 'noite'}`;
         const slot = daySlots.find((row) => row.period === period);
-        if (!slot) {
-          responses.push(`${label}: horário inexistente no mês ativo.`);
-          continue;
-        }
+        if (!slot) continue;
         const assignment = db.prepare(`SELECT * FROM assignments
           WHERE service_slot_id=? AND member_id=? AND status='CONFIRMED' AND service_type='ORDINARY'`).get(slot.id, targetMember.id);
-        if (!assignment) {
-          responses.push(`${label}: nenhuma escala ordinária encontrada; nada foi criado.`);
-          continue;
-        }
+        if (!assignment) continue;
         db.prepare('UPDATE assignments SET display_prefix=?,updated_at=? WHERE id=?')
           .run(displayPrefix, now(), assignment.id);
         audit({ action: 'BOT_ORDINARY_JUSTIFICATION', entityType: 'ASSIGNMENT', entityId: assignment.id,
           before: assignment, after: db.prepare('SELECT * FROM assignments WHERE id=?').get(assignment.id),
           reason: `Justificativa registrada por ${requestedBy.rank} ${requestedBy.operational_name}` });
         updated += 1;
-        responses.push(`${label}: (${displayPrefix}) incluído depois do nome.`);
       }
     }
   })();
 
-  return `*JUSTIFICATIVA — ${targetMember.rank.toUpperCase()} ${targetMember.operational_name.toUpperCase()}*
-
-${responses.join('\n')}
-
-${updated ? `${updated} escala(s) ordinária(s) atualizada(s).` : 'Nenhuma escala foi alterada.'}
-Nenhuma vaga foi criada e nenhuma hora foi acrescentada.`;
+  const requestedDates = [...new Set(choices.map((choice) =>
+    `${String(choice.day).padStart(2, '0')}/${String(competency.month).padStart(2, '0')}/${competency.year}`))];
+  const summary = `*JUSTIFICATIVA ${updated ? 'REGISTRADA' : 'NÃO REGISTRADA'}*
+Data: ${requestedDates.join(', ')}
+Militar: ${targetMember.rank} ${targetMember.operational_name}`;
+  return updated ? summary : `${summary}
+Nenhuma escala ordinária encontrada nessa data e turno.`;
 }
 
 function parseSingleChangeChoice(value, { optional = false } = {}) {
