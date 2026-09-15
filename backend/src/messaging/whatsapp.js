@@ -524,10 +524,10 @@ async function applyColumnCommand(request, requestedBy) {
     .filter((date) => excludedDays.has(Number(dayjs(date).format('D'))))
     .map((date) => dayjs(date).format('DD/MM/YYYY'));
   const dateDescription = request.excludedDays.length
-    ? `${competency.name} — exceto ${excludedDescription.join(', ')}`
+    ? `Exceto: ${excludedDescription.join(', ')}`
     : request.days.length
-      ? targetDates.map((date) => dayjs(date).format('DD/MM/YYYY')).join(', ')
-      : `${competency.name} — mês inteiro`;
+      ? `${targetDates.length === 1 ? 'Data' : 'Datas'}: ${targetDates.map((date) => dayjs(date).format('DD/MM/YYYY')).join(', ')}`
+      : '';
   const canonicalDates = request.excludedDays.length
     ? `exceto dias ${request.excludedDays.join(', ')}`
     : request.days.length
@@ -587,18 +587,16 @@ Para excluir essas marcações e fechar, envie:
     before: { assignmentsToRemove }, after: { column: request.column, dates: targetDates, excludedDays: request.excludedDays, resultingColumns },
     reason: `Solicitado no grupo por ${requestedBy.rank} ${requestedBy.operational_name}` });
 
-  let queueWarning = '';
   if (request.action === 'OPEN' && opened) {
     const { startColumnMarkingRound } = await import('./automation.js');
-    const round = await startColumnMarkingRound({ competencyId: competency.id, column: request.column,
+    await startColumnMarkingRound({ competencyId: competency.id, column: request.column,
       userId: administrator.id, reason: 'WHATSAPP_COLUMN_OPEN' });
-    if (!round.started) queueWarning = `\nFila não iniciada: ${round.reason}`;
   }
   const removed = assignmentsToRemove.length && request.forceDelete
     ? `\n${assignmentsToRemove.length} marcação(ões) excluída(s).`
     : '';
   return `*${request.column}ª COLUNA ${request.action === 'OPEN' ? 'ABERTA' : 'FECHADA'}*
-${dateDescription}${removed}${queueWarning}`;
+${dateDescription}${removed}`.trim();
 }
 
 function extractDisplayPrefix(value) {

@@ -446,6 +446,8 @@ test('a group administrator can open the fourth column on one date only', async 
     { service_date: `${futureYear}-09-18`, current_capacity: 2 }
   ]);
   assert.match(replies.at(-1).text, /4ª COLUNA ABERTA/);
+  assert.match(replies.at(-1).text, new RegExp(`Data: 17/09/${futureYear}`));
+  assert.doesNotMatch(replies.at(-1).text, /fila|antiguidade/i);
 });
 
 test('a group administrator can open the fourth column on the whole month except selected days', async () => {
@@ -453,7 +455,8 @@ test('a group administrator can open the fourth column on the whole month except
 
   await receive('@Escalante abrir 4ª coluna exceto dias 17 e 18', [bot]);
 
-  assert.match(replies.at(-1).text, /exceto 17\/09\/\d{4}, 18\/09\/\d{4}/i);
+  assert.match(replies.at(-1).text, /exceto: 17\/09\/\d{4}, 18\/09\/\d{4}/i);
+  assert.doesNotMatch(replies.at(-1).text, /fila|antiguidade/i);
   assert.deepEqual(db.prepare(`SELECT service_date,current_capacity FROM service_slots
     WHERE competency_id=? AND service_date IN (?,?,?) AND period='DIURNO' ORDER BY service_date`)
     .all(competency.id, `${futureYear}-09-16`, `${futureYear}-09-17`, `${futureYear}-09-18`), [
