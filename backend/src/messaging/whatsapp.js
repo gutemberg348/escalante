@@ -1158,9 +1158,8 @@ async function saveAndStartMarkingSchedulePlan(plan, requestedBy) {
       WHERE competency_id=? AND current_capacity>=? LIMIT 1`).get(competency.id, plan.column);
     if (!opened) return `A ${plan.column}ª coluna ainda não está aberta. Abra a coluna antes de iniciar este cronograma.`;
   }
-  const members = db.prepare(`SELECT id,rank,operational_name,seniority_position
-    FROM members WHERE seniority_position IS NOT NULL AND active=1
-      AND operational_status='ACTIVE' AND authorization_status='AUTHORIZED'
+  const members = db.prepare(`SELECT id,rank,operational_name,seniority_position,active,operational_status,authorization_status
+    FROM members WHERE seniority_position IS NOT NULL
     ORDER BY seniority_position`).all();
   const memberByLabel = new Map();
   for (const member of members) {
@@ -1170,16 +1169,23 @@ async function saveAndStartMarkingSchedulePlan(plan, requestedBy) {
   }
   const scheduled = [];
   const usedMembers = new Set();
-  for (const [index, entry] of plan.entries.entries()) {
+  const skippedMembers = [];
+  for (const entry of plan.entries) {
     const member = memberByLabel.get(normalizeRosterLabel(entry.name));
     if (!member) return `Não encontrei *${entry.name}* na Antiguidade exatamente como informado.`;
     if (usedMembers.has(member.id)) return `O militar *${member.rank} ${member.operational_name}* aparece mais de uma vez no cronograma.`;
-    if (index && member.seniority_position <= scheduled[index - 1].member.seniority_position) {
+    usedMembers.add(member.id);
+    if (member.active !== 1 || member.operational_status !== 'ACTIVE' || member.authorization_status !== 'AUTHORIZED') {
+      skippedMembers.push(member);
+      continue;
+    }
+    const previous = scheduled.at(-1);
+    if (previous && member.seniority_position <= previous.member.seniority_position) {
       return `A ordem está diferente da Antiguidade. O militar *${member.rank} ${member.operational_name}* precisa respeitar a ordem dos nomes enviados.`;
     }
-    usedMembers.add(member.id);
     scheduled.push({ member, deadlineAt: entry.deadlineAt });
   }
+  if (!scheduled.length) return 'O cronograma não possui nenhum militar ativo e autorizado para iniciar a fila.';
   for (let index = 0; index < scheduled.length; index += 1) {
     const deadline = new Date(scheduled[index].deadlineAt);
     if (deadline <= new Date()) return `O horário de *${scheduled[index].member.rank} ${scheduled[index].member.operational_name}* já passou.`;
@@ -1201,10 +1207,14 @@ async function saveAndStartMarkingSchedulePlan(plan, requestedBy) {
     for (const item of scheduled) save.run(item.member.id, item.deadlineAt, administrator.id, stamp);
   })();
   audit({ userId: administrator.id, action: 'WHATSAPP_IMPORT_MARKING_SCHEDULE', entityType: 'COMPETENCY', entityId: competency.id,
-    after: { column: plan.column, deadlines: scheduled.map((item) => ({ memberId: item.member.id, deadlineAt: item.deadlineAt })) },
+    after: {
+      column: plan.column,
+      deadlines: scheduled.map((item) => ({ memberId: item.member.id, deadlineAt: item.deadlineAt })),
+      skippedMemberIds: skippedMembers.map((item) => item.id)
+    },
     reason: `Cronograma enviado no grupo por ${requestedBy.rank} ${requestedBy.operational_name}` });
   const { startColumnMarkingRound } = await import('./automation.js');
-  const startsAt = dayjs(plan.entries[0].deadlineAt).startOf('day').hour(markingRoundStartHour).minute(0).second(0).millisecond(0);
+  const startsAt = dayjs(scheduled[0].deadlineAt).startOf('day').hour(markingRoundStartHour).minute(0).second(0).millisecond(0);
   const result = await startColumnMarkingRound({ competencyId: competency.id, column: plan.column,
     userId: administrator.id, reason: `WHATSAPP_IMPORTED_SCHEDULE_BY_${requestedBy.id}`, rebaseDeadlines: false,
     startsAt: startsAt.toISOString() });

@@ -728,6 +728,27 @@ A marcação pode iniciar agora
   assert.equal(db.prepare('SELECT member_id FROM marking_turns WHERE active=1').get().member_id, 19);
 });
 
+test('a member on vacation in the pasted schedule is skipped without blocking the queue', async () => {
+  socket.groupMetadata = async () => ({ participants: [{ id: sender, admin: 'admin' }] });
+  db.prepare("UPDATE members SET operational_status='VACATION' WHERE id=18").run();
+
+  await receive(`@Escalante
+ESCALA DE SETEMBRO
+A marcação pode iniciar agora
+25/09/${futureYear}
+2ª coluna
+1. Sgt Remetente — até 08h
+2. Sgt Alex — até 09h
+3. Sgt Outro — até 10h`, [bot]);
+
+  assert.doesNotMatch(replies.at(-1).text, /Não encontrei.*Alex|lista completa|possui.*apto/i);
+  assert.match(replies.at(-1).text, /CRONOGRAMA (?:PROGRAMADO|INICIADO)|Horários do cronograma salvos/i);
+  assert.deepEqual(db.prepare('SELECT member_id FROM marking_deadlines ORDER BY deadline_at').all(), [
+    { member_id: 1 },
+    { member_id: 19 }
+  ]);
+});
+
 test('starting the schedule is recognized and restricted to group administrators', async () => {
   await receive('@Escalante começar cronograma', [bot]);
 

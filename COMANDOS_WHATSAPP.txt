@@ -151,7 +151,9 @@ Somente "12h" não define o turno; escreva dia ou noite.
    A lista pode conter somente os militares que participarão daquela rodada,
    respeitando entre eles a ordem da página Antiguidade. Quem não for enviado
    fica fora da fila e poderá marcar quando a rodada terminar e a marcação ficar
-   livre. Para a 3ª ou a 4ª coluna, abra a coluna antes de enviar a lista.
+   livre. Se a lista ainda tiver alguém de férias, licença, afastado, desativado
+   ou não autorizado, esse nome será ignorado e não impedirá o início da fila.
+   Para a 3ª ou a 4ª coluna, abra a coluna antes de enviar a lista.
 
    /escala
    Envia o PDF do mês ativo.
