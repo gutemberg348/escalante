@@ -109,14 +109,15 @@ Somente "12h" não define o turno; escreva dia ou noite.
    @Escalante mostrar cronograma
    Também mostram o cronograma. O erro comum "conrograma" é aceito.
 
-   /iniciar cronograma
-   /começar cronograma
-   @Escalante iniciar cronograma
-   @Escalante começar cronograma
+   /iniciar cronograma dia 25/10/2026 2ª coluna
+   /começar cronograma dia 25/10/2026 2ª coluna
+   @Escalante iniciar cronograma dia 25/10/2026 2ª coluna
+   @Escalante começar cronograma dia 25/10/2026 2ª coluna
    Inicia ou reinicia a fila usando a ordem e os horários da página Antiguidade.
+   A data e a coluna são obrigatórias. A fila começa às 06h da data informada.
    A mensagem informa o mês, que a marcação iniciou, a coluna e a data.
-   Quando os horários passarem para o dia seguinte, uma nova data será mostrada
-   e a numeração continuará normalmente.
+   A fila vale somente para a data e a coluna informadas. Quando o último militar
+   terminar, a marcação fica livre e não continua automaticamente no dia seguinte.
    Somente administradores do grupo podem iniciar ou reiniciar a fila.
 
    Também é possível marcar o bot e enviar o cronograma completo no mesmo formato:
@@ -135,10 +136,12 @@ Somente "12h" não define o turno; escreva dia ou noite.
    às 06h. Se a lista for enviada antes, ela ficará programada e ninguém poderá
    marcar antes desse horário. Exemplo: enviada no dia 24 com a data 25/10/2026,
    a fila começará em 25/10/2026 às 06h. Ele preenche os prazos e inicia a fila
-   no horário programado. Pode haver uma nova
-   data no meio da lista; os militares seguintes serão programados nesse dia.
-   A lista deve conter todos os militares aptos, exatamente na ordem da página
-   Antiguidade. Para a 3ª ou a 4ª coluna, abra a coluna antes de enviar a lista.
+   no horário programado. Todos os militares e prazos devem ficar no mesmo dia.
+   Para outra data ou coluna, envie um novo comando ou um novo cronograma.
+   A lista pode conter somente os militares que participarão daquela rodada,
+   respeitando entre eles a ordem da página Antiguidade. Quem não for enviado
+   fica fora da fila e poderá marcar quando a rodada terminar e a marcação ficar
+   livre. Para a 3ª ou a 4ª coluna, abra a coluna antes de enviar a lista.
 
    /escala
    Envia o PDF do mês ativo.
@@ -256,6 +259,27 @@ retiram o militar das próximas gerações ordinárias enquanto durar a situaç�
 Desativado também desativa o cadastro. Ativo libera novamente o militar, sem
 alterar a autorização. Se o militar estava com a vez aberta, a fila avança.
 
+Ao colocar um militar de férias, o bot atua na escala atualmente selecionada:
+remove os serviços ordinários dele, reorganiza as posições sem deixar espaços
+vazios e envia o PDF atualizado. Exemplo: se ele ocupava a 1ª posição, quem
+estava na 2ª passa para a 1ª.
+
+Se o militar possuir serviços extras, nada será alterado no primeiro pedido.
+O bot solicitará uma destas confirmações. Basta responder à mensagem dele com:
+
+   RETIRAR
+   MANTER
+
+RETIRAR remove os serviços ordinários e extras da escala selecionada.
+MANTER remove somente os ordinários. Sem extras, as férias são aplicadas
+imediatamente e o PDF atualizado é enviado.
+
+Essa mesma regra é aplicada ao trocar a situação pela página Efetivo. O painel
+pergunta se os extras devem ser mantidos ou retirados, reorganiza as posições e
+baixa o PDF atualizado. Ao mudar de Férias, Licença, Afastado ou Desativado para
+Ativo, a escala selecionada é regerada para recalcular os serviços ordinários;
+os serviços extras permanecem preservados.
+
 
 2. MESES E PDF
 --------------
@@ -278,7 +302,8 @@ O bot mostra o aviso antes de gerar. Para confirmar:
 
    /confirmar-gerar-proximo-mes
 
-O novo mês é gerado com o ciclo ordinário 1x4 e o PDF é publicado.
+O novo mês é gerado com o ciclo ordinário 1x4 e o PDF é publicado. A fila não
+começa automaticamente; envie o comando de início com a data e a coluna.
 
 
 4. ABRIR A 3ª OU A 4ª COLUNA
@@ -312,7 +337,7 @@ Variações aceitas para a coluna:
    coluna ou posição
 
 A 4ª coluna depende da 3ª. Ao abrir a 4ª, a 3ª permanece ou também fica aberta.
-Abrir uma nova coluna inicia a nova fila e publica o cronograma no grupo.
+Abrir uma coluna não inicia a fila. Depois, envie o cronograma com data e coluna.
 
 
 5. FECHAR A 3ª OU A 4ª COLUNA
@@ -360,3 +385,8 @@ REGRAS IMPORTANTES
 - Justificativa não cria marcação.
 - Retirar, trocar, permutar e remanejar pelo grupo afetam somente serviços extras.
 - Fechar coluna com EXCLUA é uma ação destrutiva.
+- A fila vale somente para a data e coluna informadas.
+- Ao terminar o último militar, a fila encerra e a marcação fica livre.
+- A fila não continua no dia seguinte e outra coluna não inicia automaticamente.
+- O cronograma pode conter apenas parte dos militares aptos. Os nomes omitidos
+  ficam fora da fila e voltam a poder marcar quando a rodada terminar.

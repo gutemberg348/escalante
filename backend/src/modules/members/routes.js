@@ -3,6 +3,8 @@ import { z } from 'zod';
 import { db, audit, now } from '../../database/index.js';
 import { allow } from '../../middlewares/auth.js';
 import { discoverMemberWhatsAppJid } from '../../messaging/whatsapp.js';
+import { applyVacationToCompetency } from '../../scheduling/member-status.js';
+import { regenerateOrdinaryAssignments } from '../../scheduling/monthly.js';
 
 const router = Router();
 const statuses = z.enum(['ACTIVE','VACATION','LEAVE','AWAY','INACTIVE']);
@@ -14,6 +16,10 @@ const memberSchema = z.object({
   operational_status: statuses.optional(), authorization_status: authorizations.optional(), active: z.boolean().optional(),
   monthly_hour_limit: z.coerce.number().int().min(12).max(192).optional().nullable(), hour_limit_exempt: z.boolean().optional(),
   ordinary_eligible: z.boolean().optional(), notes: z.string().optional().nullable()
+});
+const memberPatchSchema = memberSchema.partial().extend({
+  competency_id: z.coerce.number().int().positive().optional().nullable(),
+  vacation_extra_action: z.enum(['KEEP', 'REMOVE']).optional().nullable()
 });
 const base = `SELECT m.*, w.name AS wing_name FROM members m LEFT JOIN wings w ON w.id=m.default_wing_id`;
 
@@ -117,8 +123,14 @@ router.post('/', allow('ADMIN','SCHEDULER'), async (req, res, next) => {
 });
 router.patch('/:id', allow('ADMIN','SCHEDULER'), async (req, res, next) => {
   try {
-    const input = memberSchema.partial().parse(req.body); const old = db.prepare('SELECT * FROM members WHERE id=?').get(req.params.id);
+    const parsed = memberPatchSchema.parse(req.body);
+    const { competency_id: competencyId = null, vacation_extra_action: vacationExtraAction = null, ...input } = parsed;
+    const old = db.prepare('SELECT * FROM members WHERE id=?').get(req.params.id);
     if (!old) return res.status(404).json({ message: 'Militar não encontrado.' });
+    const competency = competencyId
+      ? db.prepare('SELECT * FROM competencies WHERE id=? AND generated_at IS NOT NULL').get(competencyId)
+      : null;
+    if (competencyId && !competency) return res.status(404).json({ message: 'Escala selecionada não encontrada.' });
     const nextRank = input.rank?.trim() ?? old.rank;
     const nextOperationalName = input.operational_name?.trim() ?? old.operational_name;
     if (input.rank !== undefined || input.operational_name !== undefined) {
@@ -143,14 +155,44 @@ router.patch('/:id', allow('ADMIN','SCHEDULER'), async (req, res, next) => {
         : (input.ordinary_eligible ? 1 : 0),
       updated_at: now()
     };
+    let statusEffect = null;
+    if (competency && old.operational_status !== 'VACATION' && merged.operational_status === 'VACATION') {
+      statusEffect = applyVacationToCompetency({
+        memberId: old.id,
+        competencyId: competency.id,
+        extraAction: vacationExtraAction,
+        userId: req.user.id,
+        reason: 'Férias aplicadas pelo painel administrativo'
+      });
+      if (statusEffect.confirmationRequired) {
+        return res.status(409).json({
+          code: 'VACATION_EXTRAS_CONFIRMATION',
+          message: `${old.rank} ${old.operational_name} possui serviços extras na escala selecionada. Escolha se deseja mantê-los ou retirá-los.`,
+          impact: {
+            ordinaryAssignments: statusEffect.ordinaryAssignments,
+            extraordinaryAssignments: statusEffect.extraordinaryAssignments
+          }
+        });
+      }
+    }
     db.transaction(() => {
       if (phoneChanged) db.prepare('DELETE FROM member_whatsapp_identities WHERE member_id=?').run(merged.id);
       db.prepare(`UPDATE members SET rank=@rank,operational_name=@operational_name,full_name=@full_name,phone_number=@phone_number,whatsapp_jid=@whatsapp_jid,unit_type=@unit_type,default_wing_id=@default_wing_id,operational_status=@operational_status,authorization_status=@authorization_status,active=@active,monthly_hour_limit=@monthly_hour_limit,hour_limit_exempt=@hour_limit_exempt,ordinary_eligible=@ordinary_eligible,notes=@notes,updated_at=@updated_at WHERE id=@id`).run(merged);
       synchronizeWhatsAppIdentities(merged.id, merged.phone_number, merged.whatsapp_jid);
     })();
     await discoverMemberWhatsAppJid(merged.id).catch(() => null);
-    const item = db.prepare('SELECT * FROM members WHERE id=?').get(req.params.id); audit({ userId:req.user.id, action:'UPDATE', entityType:'MEMBER', entityId:item.id, before:old, after:item, req });
-    res.json({ item });
+    if (competency && old.operational_status !== 'ACTIVE' && merged.operational_status === 'ACTIVE') {
+      statusEffect = {
+        type: 'REGENERATED_ON_REACTIVATION',
+        generation: regenerateOrdinaryAssignments({
+          competencyId: competency.id,
+          userId: req.user.id,
+          reason: `Escala regerada após retorno de ${merged.rank} ${merged.operational_name} ao status Ativo`
+        })
+      };
+    }
+    const item = db.prepare('SELECT * FROM members WHERE id=?').get(req.params.id); audit({ userId:req.user.id, action:'UPDATE', entityType:'MEMBER', entityId:item.id, before:old, after:{ ...item, statusEffect }, req });
+    res.json({ item, statusEffect, competency: competency ? { id: competency.id, name: competency.name } : null });
   } catch (error) { next(error); }
 });
 router.delete('/:id', allow('ADMIN','SCHEDULER'), (req, res, next) => {

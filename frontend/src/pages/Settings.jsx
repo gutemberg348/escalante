@@ -42,7 +42,7 @@ export default function Settings() {
           <label>Horário de envio<input type="time" required disabled={!settings.dailyEnabled} value={settings.dailyTime} onChange={(event) => set('dailyTime', event.target.value)} /></label>
         </article>
         <article className={`automation-card ${settings.monthlyEnabled ? 'active' : ''}`}>
-          <div className="automation-card-head"><div><h3>Vagas do próximo mês</h3><p>Envia o PDF, publica todas as vagas e chama o primeiro da fila.</p></div><label className="automation-toggle"><input type="checkbox" checked={settings.monthlyEnabled} onChange={(event) => set('monthlyEnabled', event.target.checked)} /><span>Ativar</span></label></div>
+          <div className="automation-card-head"><div><h3>Vagas do próximo mês</h3><p>Gera a escala e envia o PDF. A fila aguarda o comando com data e coluna.</p></div><label className="automation-toggle"><input type="checkbox" checked={settings.monthlyEnabled} onChange={(event) => set('monthlyEnabled', event.target.checked)} /><span>Ativar</span></label></div>
           <div className="automation-fields"><label>Dia do mês<input type="number" min="1" max="31" required disabled={!settings.monthlyEnabled} value={settings.monthlyDay} onChange={(event) => set('monthlyDay', Number(event.target.value))} /></label><label>Horário<input type="time" required disabled={!settings.monthlyEnabled} value={settings.monthlyTime} onChange={(event) => set('monthlyTime', event.target.value)} /></label></div><small>Exemplo: dia 25 prepara e envia as vagas do mês seguinte.</small>
         </article>
         <article className={`automation-card ${settings.markingReminderEnabled ? 'active' : ''}`}>

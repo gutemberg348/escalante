@@ -51,8 +51,13 @@ beforeEach(() => {
     DELETE FROM schedule_pdf_column_releases;
     UPDATE service_slots SET current_capacity=2;`);
   db.prepare("UPDATE members SET active=1,operational_status='ACTIVE',authorization_status='AUTHORIZED',ordinary_eligible=1").run();
+  db.exec(`UPDATE members SET seniority_position=NULL;
+    UPDATE members SET seniority_position=1 WHERE id=1;
+    UPDATE members SET seniority_position=2 WHERE id=18;
+    UPDATE members SET seniority_position=3 WHERE id=19;`);
   setting.run('bot_active_competency_id', String(competency.id), stamp);
   setting.run('bot_marking_round_starts_at', '', stamp);
+  setting.run('bot_pending_vacation_confirmation', '', stamp);
   replies = [];
   socket = {
     user: { id: bot, lid: '212000000000001@lid' },
@@ -434,6 +439,8 @@ test('only a group administrator can open a schedule column', async () => {
 
 test('status parser recognizes management variants but not parenthetical justifications', () => {
   assert.deepEqual(parseMemberStatusCommand('coloque de férias'), { status: 'VACATION' });
+  assert.deepEqual(parseMemberStatusCommand('férias retirar extras'), { status: 'VACATION', extraAction: 'REMOVE' });
+  assert.deepEqual(parseMemberStatusCommand('férias manter os extras'), { status: 'VACATION', extraAction: 'KEEP' });
   assert.deepEqual(parseMemberStatusCommand('ponha de licença'), { status: 'LEAVE' });
   assert.deepEqual(parseMemberStatusCommand('afastar'), { status: 'AWAY' });
   assert.deepEqual(parseMemberStatusCommand('deixar ativo'), { status: 'ACTIVE' });
@@ -466,8 +473,71 @@ test('a group administrator can set vacation, leave, away, active and inactive w
       authorization_status: 'AUTHORIZED',
       active
     });
-    assert.match(replies.at(-1).text, /SITUAÇÃO ATUALIZADA/i);
+    assert.ok(replies.some((reply) => /SITUAÇÃO ATUALIZADA/i.test(reply.text ?? '')));
   }
+});
+
+test('vacation removes ordinary duties, compacts positions and sends the updated PDF', async () => {
+  socket.groupMetadata = async () => ({ participants: [{ id: sender, admin: 'admin' }] });
+  addConfirmedAssignment({ memberId: 18, day: 20, period: 'DIURNO', serviceType: 'ORDINARY' });
+  addConfirmedAssignment({ memberId: 19, day: 20, period: 'DIURNO', serviceType: 'EXTRAORDINARY' });
+
+  await receive('@Escalante férias @Alex', [bot, alex]);
+
+  assert.equal(db.prepare('SELECT operational_status FROM members WHERE id=18').get().operational_status, 'VACATION');
+  assert.deepEqual(db.prepare(`SELECT member_id,position_number FROM assignments a JOIN service_slots s ON s.id=a.service_slot_id
+    WHERE s.competency_id=? AND s.service_date=? AND s.period='DIURNO' ORDER BY position_number`)
+    .all(competency.id, `${futureYear}-09-20`), [{ member_id: 19, position_number: 1 }]);
+  assert.ok(replies.some((reply) => /Ordinários removidos: 1/i.test(reply.text ?? '')));
+  assert.ok(replies.some((reply) => reply.document && reply.mimetype === 'application/pdf'));
+});
+
+test('vacation asks before touching extras and can keep them', async () => {
+  socket.groupMetadata = async () => ({ participants: [{ id: sender, admin: 'admin' }] });
+  addConfirmedAssignment({ memberId: 18, day: 20, period: 'DIURNO', serviceType: 'ORDINARY' });
+  addConfirmedAssignment({ memberId: 18, day: 21, period: 'NOTURNO', serviceType: 'EXTRAORDINARY' });
+
+  await receive('@Escalante férias @Alex', [bot, alex]);
+
+  assert.match(replies.at(-1).text, /Nada foi alterado ainda/i);
+  assert.equal(db.prepare('SELECT operational_status FROM members WHERE id=18').get().operational_status, 'ACTIVE');
+  assert.equal(db.prepare('SELECT COUNT(*) total FROM assignments WHERE member_id=18').get().total, 2);
+
+  await receive('@Escalante férias @Alex manter extras', [bot, alex]);
+
+  assert.equal(db.prepare('SELECT operational_status FROM members WHERE id=18').get().operational_status, 'VACATION');
+  assert.deepEqual(db.prepare('SELECT service_type FROM assignments WHERE member_id=18').all(), [
+    { service_type: 'EXTRAORDINARY' }
+  ]);
+  assert.ok(replies.some((reply) => /Extras mantidos: 1/i.test(reply.text ?? '')));
+});
+
+test('replying only RETIRAR confirms vacation and removes extraordinary duties', async () => {
+  socket.groupMetadata = async () => ({ participants: [{ id: sender, admin: 'superadmin' }] });
+  addConfirmedAssignment({ memberId: 18, day: 21, period: 'NOTURNO', serviceType: 'EXTRAORDINARY' });
+
+  await receive('@Escalante férias @Alex', [bot, alex]);
+  assert.match(replies.at(-1).text, /responda:\n\*RETIRAR\*/i);
+
+  await receive('retirar', [], {
+    participant: bot,
+    quotedMessage: { conversation: 'Confirme as férias respondendo RETIRAR ou MANTER.' }
+  });
+
+  assert.equal(db.prepare('SELECT operational_status FROM members WHERE id=18').get().operational_status, 'VACATION');
+  assert.equal(db.prepare('SELECT COUNT(*) total FROM assignments WHERE member_id=18').get().total, 0);
+  assert.ok(replies.some((reply) => /Extras removidos: 1/i.test(reply.text ?? '')));
+});
+
+test('returning a member to active by WhatsApp regenerates the selected scale and sends its PDF', async () => {
+  socket.groupMetadata = async () => ({ participants: [{ id: sender, admin: 'admin' }] });
+  db.prepare("UPDATE members SET operational_status='VACATION' WHERE id=18").run();
+
+  await receive('@Escalante deixar @Alex ativo', [bot, alex]);
+
+  assert.equal(db.prepare('SELECT operational_status FROM members WHERE id=18').get().operational_status, 'ACTIVE');
+  assert.ok(replies.some((reply) => /escala ordinária.*foi regerada/i.test(reply.text ?? '')));
+  assert.ok(replies.some((reply) => reply.document && reply.mimetype === 'application/pdf'));
 });
 
 test('a group administrator can open the fourth column on one date only', async () => {
@@ -557,7 +627,22 @@ test('marking is blocked until the programmed queue start time', async () => {
   assert.match(replies.at(-1).text, /fila de marcação começará/i);
 });
 
-test('a complete pasted schedule reads the month, dates, column, members and deadline hours', () => {
+test('the queue ends and becomes free instead of continuing on the next date', async () => {
+  db.prepare('UPDATE members SET seniority_position=NULL').run();
+  db.prepare('UPDATE members SET seniority_position=1 WHERE id=1').run();
+  db.prepare('UPDATE members SET seniority_position=2 WHERE id=18').run();
+  db.prepare(`INSERT INTO marking_deadlines (member_id,deadline_at,updated_by,updated_at) VALUES
+    (1,?,1,?),(18,?,1,?)`).run(`${futureYear}-09-25T08:00:00`, stamp, `${futureYear}-09-26T08:00:00`, stamp);
+  db.prepare(`INSERT INTO marking_turns (member_id,deadline_at,active,created_by,created_at)
+    VALUES (1,?,1,1,?)`).run(`${futureYear}-09-25T08:00:00`, stamp);
+
+  await receive('/passo a vez', []);
+
+  assert.equal(db.prepare('SELECT COUNT(*) total FROM marking_turns WHERE active=1').get().total, 0);
+  assert.match(replies.at(-1).text, /marcação agora está livre/i);
+});
+
+test('a complete pasted schedule reads one date, column, members and deadline hours', () => {
   const plan = parseMarkingSchedulePlan(`ESCALA DE SETEMBRO
 
 A marcação pode iniciar agora
@@ -568,9 +653,6 @@ A marcação pode iniciar agora
 
 1. Sgt Remetente — até 08h
 2. Sgt Alex — até 09h30
-
-26/09/${futureYear}
-
 3. Sgt Outro — até 10h`);
 
   assert.equal(plan.error, null);
@@ -584,7 +666,20 @@ A marcação pode iniciar agora
   ]);
   assert.equal(new Date(plan.entries[0].deadlineAt).getHours(), 8);
   assert.equal(new Date(plan.entries[1].deadlineAt).getMinutes(), 30);
-  assert.equal(new Date(plan.entries[2].deadlineAt).getDate(), 26);
+  assert.equal(new Date(plan.entries[2].deadlineAt).getDate(), 25);
+});
+
+test('a pasted schedule cannot continue automatically on a second date', () => {
+  const plan = parseMarkingSchedulePlan(`ESCALA DE SETEMBRO
+A marcação pode iniciar agora
+25/09/${futureYear}
+2ª coluna
+1. Sgt Remetente — até 08h
+26/09/${futureYear}
+2. Sgt Alex — até 09h
+3. Sgt Outro — até 10h`);
+
+  assert.match(plan.error, /mesmo dia|novo cronograma/i);
 });
 
 test('only a group administrator can import and start a complete pasted schedule', async () => {
@@ -600,10 +695,43 @@ A marcação pode iniciar agora
   assert.match(replies.at(-1).text, /Somente administradores do grupo podem preencher horários e iniciar a fila/i);
 });
 
+test('an imported schedule accepts a subset and skips omitted eligible members', async () => {
+  socket.groupMetadata = async () => ({ participants: [{ id: sender, admin: 'admin' }] });
+
+  await receive(`@Escalante
+ESCALA DE SETEMBRO
+A marcação pode iniciar agora
+25/09/${futureYear}
+2ª coluna
+1. Sgt Remetente — até 08h
+2. Sgt Outro — até 09h`, [bot]);
+
+  assert.doesNotMatch(replies.at(-1).text, /lista completa|possui 2 militar/i);
+  assert.deepEqual(db.prepare('SELECT member_id FROM marking_deadlines ORDER BY deadline_at').all(), [
+    { member_id: 1 },
+    { member_id: 19 }
+  ]);
+  db.prepare(`INSERT INTO marking_turns (member_id,deadline_at,active,created_by,created_at)
+    VALUES (1,?,1,1,?)`).run(`${futureYear}-09-25T08:00:00`, stamp);
+
+  setting.run('bot_marking_round_starts_at', '', stamp);
+  await receive('/passo a vez', []);
+
+  assert.equal(db.prepare('SELECT member_id FROM marking_turns WHERE active=1').get().member_id, 19);
+});
+
 test('starting the schedule is recognized and restricted to group administrators', async () => {
   await receive('@Escalante começar cronograma', [bot]);
 
   assert.match(replies.at(-1).text, /Somente administradores do grupo podem iniciar ou reiniciar/i);
+});
+
+test('an administrator must provide the start date and column when starting a schedule', async () => {
+  socket.groupMetadata = async () => ({ participants: [{ id: sender, admin: 'admin' }] });
+
+  await receive('@Escalante começar cronograma', [bot]);
+
+  assert.match(replies.at(-1).text, /Informe a coluna/i);
 });
 
 test('a group administrator can open the fourth column on the whole month except selected days', async () => {

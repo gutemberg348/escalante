@@ -4,8 +4,6 @@ import dayjs from 'dayjs';
 import { z } from 'zod';
 import { db, audit, now } from '../../database/index.js';
 import { allow } from '../../middlewares/auth.js';
-import { startColumnMarkingRound } from '../../messaging/automation.js';
-import { getWhatsAppStatus } from '../../messaging/whatsapp.js';
 import { buildSchedulePdf } from '../../messaging/schedule-pdf.js';
 
 const router = Router();
@@ -235,13 +233,10 @@ router.put('/pdf-columns', allow('ADMIN'), async (req, res, next) => {
     }).parse(req.body);
     const validDates = new Set(db.prepare('SELECT DISTINCT service_date FROM service_slots WHERE competency_id=?').all(input.competencyId).map((row) => row.service_date));
     if (input.items.some((item) => !validDates.has(item.serviceDate))) return res.status(400).json({ message: 'Uma das datas não pertence ao mês selecionado.' });
-    const previous = new Map(db.prepare(`SELECT service_date,third_column_open,fourth_column_open
-      FROM schedule_pdf_column_releases WHERE competency_id=?`).all(input.competencyId).map((row) => [row.service_date, row]));
     const confirmed = new Map(db.prepare(`SELECT s.service_date,s.period,COUNT(a.id) confirmed_count
       FROM service_slots s LEFT JOIN assignments a ON a.service_slot_id=s.id AND a.status='CONFIRMED'
       WHERE s.competency_id=? GROUP BY s.id`).all(input.competencyId)
       .map((row) => [`${row.service_date}:${row.period}`, Number(row.confirmed_count)]));
-    let openedColumn = 0;
     const normalized = input.items.map((item) => {
       const selected = new Set(item.openColumns);
       const fourth = selected.has(4);
@@ -250,15 +245,9 @@ router.put('/pdf-columns', allow('ADMIN'), async (req, res, next) => {
       for (const period of ['DIURNO', 'NOTURNO']) {
         if ((confirmed.get(`${item.serviceDate}:${period}`) || 0) > capacity) throw new Error(`Não é possível trancar a coluna de ${item.serviceDate}: já há militares confirmados nela.`);
       }
-      const before = previous.get(item.serviceDate);
-      if (fourth && !before?.fourth_column_open) openedColumn = Math.max(openedColumn, 4);
-      else if (third && !before?.third_column_open) openedColumn = Math.max(openedColumn, 3);
       return { serviceDate: item.serviceDate, third, fourth, capacity, openColumns: [1, 2, ...(third ? [3] : []), ...(fourth ? [4] : [])] };
     });
     const stamp = now();
-    if (openedColumn && getWhatsAppStatus().status !== 'CONNECTED') {
-      return res.status(409).json({ message: 'Conecte o WhatsApp antes de abrir uma nova coluna; o cronograma e a fila precisam ser publicados juntos.' });
-    }
     db.transaction(() => {
       const save = db.prepare(`INSERT INTO schedule_pdf_column_releases
         (competency_id,service_date,third_column_open,fourth_column_open,updated_by,updated_at)
@@ -275,10 +264,7 @@ router.put('/pdf-columns', allow('ADMIN'), async (req, res, next) => {
       }
     })();
     audit({ userId: req.user.id, action: 'UPDATE_PDF_COLUMNS', entityType: 'SCHEDULE_PDF', entityId: String(input.competencyId), after: normalized, req });
-    const round = openedColumn
-      ? await startColumnMarkingRound({ competencyId: input.competencyId, column: openedColumn, userId: req.user.id, reason: 'MANUAL_COLUMN_OPEN' })
-      : null;
-    res.json({ item: { competencyId: input.competencyId, items: normalized.map(({ serviceDate, openColumns }) => ({ serviceDate, openColumns })) }, round });
+    res.json({ item: { competencyId: input.competencyId, items: normalized.map(({ serviceDate, openColumns }) => ({ serviceDate, openColumns })) } });
   } catch (error) { next(error); }
 });
 

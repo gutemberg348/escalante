@@ -62,26 +62,31 @@ function scheduleRows(competencyId, empty = false) {
 
 function eligibleMembers() {
   return db.prepare(`SELECT m.id,m.seniority_position,d.deadline_at
-    FROM members m LEFT JOIN marking_deadlines d ON d.member_id=m.id
+    FROM members m JOIN marking_deadlines d ON d.member_id=m.id
     WHERE m.seniority_position IS NOT NULL AND m.active=1 AND m.operational_status='ACTIVE'
       AND m.authorization_status='AUTHORIZED' ORDER BY m.seniority_position`).all();
 }
 
-function rebaseDeadlinesForRound(userId) {
+function rebaseDeadlinesForRound(userId, deadlineDate = null) {
   const members = eligibleMembers();
   if (!members.length || members.some((member) => !member.deadline_at)) return false;
   const current = dayjs();
   let previous = null;
+  const rebased = [];
+  const fixedDate = deadlineDate ? dayjs(deadlineDate).startOf('day') : null;
+  if (fixedDate && !fixedDate.isValid()) return false;
+  for (const member of members) {
+    const template = dayjs(member.deadline_at);
+    let candidate = (fixedDate ?? current.startOf('day')).hour(template.hour()).minute(template.minute()).second(0).millisecond(0);
+    if (!fixedDate && !previous && !candidate.isAfter(current)) candidate = candidate.add(1, 'day');
+    while (!fixedDate && previous && !candidate.isAfter(previous)) candidate = candidate.add(1, 'day');
+    if (previous && !candidate.isAfter(previous)) return false;
+    rebased.push({ id: member.id, deadlineAt: candidate.toISOString() });
+    previous = candidate;
+  }
   const update = db.prepare('UPDATE marking_deadlines SET deadline_at=?,updated_by=?,updated_at=? WHERE member_id=?');
   db.transaction(() => {
-    for (const member of members) {
-      const template = dayjs(member.deadline_at);
-      let candidate = current.startOf('day').hour(template.hour()).minute(template.minute()).second(0).millisecond(0);
-      if (!previous && !candidate.isAfter(current)) candidate = candidate.add(1, 'day');
-      while (previous && !candidate.isAfter(previous)) candidate = candidate.add(1, 'day');
-      update.run(candidate.toISOString(), userId, now(), member.id);
-      previous = candidate;
-    }
+    for (const item of rebased) update.run(item.deadlineAt, userId, now(), item.id);
   })();
   return true;
 }
@@ -103,13 +108,13 @@ function openPreparedMarkingSequence(competency, administratorId) {
   return true;
 }
 
-export async function startColumnMarkingRound({ competencyId, column, userId = null, reason = 'COLUMN_OPEN', rebaseDeadlines = true, startsAt = null }) {
+export async function startColumnMarkingRound({ competencyId, column, userId = null, reason = 'COLUMN_OPEN', rebaseDeadlines = true, startsAt = null, deadlineDate = null }) {
   if (getWhatsAppStatus().status !== 'CONNECTED') return { started: false, reason: 'WhatsApp desconectado.' };
   const competency = db.prepare('SELECT * FROM competencies WHERE id=?').get(competencyId);
   if (!competency) return { started: false, reason: 'Mês não encontrado.' };
   const administratorId = userId || db.prepare(`SELECT id FROM users WHERE role='ADMIN' AND active=1 ORDER BY id LIMIT 1`).get()?.id;
   if (!administratorId) return { started: false, reason: 'Administrador não encontrado.' };
-  if (rebaseDeadlines && !rebaseDeadlinesForRound(administratorId)) return { started: false, reason: 'Preencha todos os horários na Antiguidade.' };
+  if (rebaseDeadlines && !rebaseDeadlinesForRound(administratorId, deadlineDate)) return { started: false, reason: 'Os horários precisam estar preenchidos, em ordem crescente e dentro do mesmo dia.' };
   if (!openPreparedMarkingSequence(competency, administratorId)) return { started: false, reason: 'Não foi possível abrir a fila.' };
   const scheduledStart = startsAt && dayjs(startsAt).isAfter(dayjs()) ? dayjs(startsAt).toISOString() : '';
   writeSetting('bot_active_marking_column', column, administratorId);
@@ -119,44 +124,6 @@ export async function startColumnMarkingRound({ competencyId, column, userId = n
   const reminder = scheduledStart ? false : await notifyCurrentMarkingTurn();
   writeSetting(`marking_round_${competency.id}_${column}`, `${reason}:${now()}`, administratorId);
   return { started: true, scheduled: Boolean(scheduledStart), startsAt: scheduledStart || null, scheduleSent: schedule.sent, reminderSent: reminder, column };
-}
-
-async function startOpenedMonthQueue({ competency, monthKey, administrator }) {
-  if (readSetting('automation_last_monthly_queue_started') === monthKey) {
-    const activeColumn = Number(readSetting('bot_active_marking_column') || 2);
-    await sendMarkingSchedule({ competencyId: competency.id, column: activeColumn });
-    return notifyCurrentMarkingTurn();
-  }
-  const result = await startColumnMarkingRound({ competencyId: competency.id, column: 2, userId: administrator.id, reason: 'MONTH_OPEN' });
-  if (result.started) writeSetting('automation_last_monthly_queue_started', monthKey, administrator.id);
-  return result.started;
-}
-
-async function maybeOpenThirdColumnRound() {
-  if (getWhatsAppStatus().status !== 'CONNECTED') return false;
-  const competencyId = Number(readSetting('bot_active_competency_id'));
-  if (!Number.isInteger(competencyId) || competencyId < 1) return false;
-  if (Number(readSetting('bot_active_marking_column') || 2) >= 3) return false;
-  const coverage = db.prepare(`SELECT COUNT(*) total,
-      SUM(CASE WHEN confirmed_count>=2 THEN 1 ELSE 0 END) filled
-    FROM (SELECT s.id,COUNT(a.id) confirmed_count FROM service_slots s
-      LEFT JOIN assignments a ON a.service_slot_id=s.id AND a.status='CONFIRMED'
-      WHERE s.competency_id=? AND s.status='OPEN' AND s.homologated_at IS NULL GROUP BY s.id)`).get(competencyId);
-  if (!coverage.total || Number(coverage.filled) !== Number(coverage.total)) return false;
-  const administrator = db.prepare(`SELECT id FROM users WHERE role='ADMIN' AND active=1 ORDER BY id LIMIT 1`).get();
-  if (!administrator) return false;
-  const dates = db.prepare('SELECT DISTINCT service_date FROM service_slots WHERE competency_id=?').all(competencyId);
-  const stamp = now();
-  db.transaction(() => {
-    const save = db.prepare(`INSERT INTO schedule_pdf_column_releases
-      (competency_id,service_date,third_column_open,fourth_column_open,updated_by,updated_at)
-      VALUES (?,?,1,0,?,?) ON CONFLICT(competency_id,service_date) DO UPDATE SET
-      third_column_open=1,updated_by=excluded.updated_by,updated_at=excluded.updated_at`);
-    for (const { service_date: serviceDate } of dates) save.run(competencyId, serviceDate, administrator.id, stamp);
-    db.prepare('UPDATE service_slots SET current_capacity=3,updated_at=? WHERE competency_id=?').run(stamp, competencyId);
-  })();
-  const result = await startColumnMarkingRound({ competencyId, column: 3, userId: administrator.id, reason: 'AUTO_SECOND_COLUMN_FULL' });
-  return result.started;
 }
 
 function tomorrowScheduleMessage(serviceDate) {
@@ -219,9 +186,8 @@ export async function sendMonthlyOpening({ force = false, advance = false } = {}
     fileName: `escala-${monthKey}.pdf`,
     caption: `*ESCALA — ${competency.name.toUpperCase()}*\n\nServiços ordinários em preto; vagas restantes serão preenchidas como extras.`
   });
-  const started = administrator ? await startOpenedMonthQueue({ competency, monthKey, administrator }) : false;
   writeSetting('automation_last_monthly_run', monthKey);
-  return { sent: true, sequenceStarted: started, competency, generation };
+  return { sent: true, sequenceStarted: false, competency, generation };
 }
 
 export async function sendMarkingReminder({ force = false } = {}) {
@@ -249,14 +215,7 @@ async function automationTick() {
     const nextMonthKey = current.add(1, 'month').format('YYYY-MM');
     if (settings.monthlyEnabled && monthlyDue) {
       if (settings.lastMonthlyRun !== nextMonthKey) await sendMonthlyOpening();
-      else if (settings.lastMonthlyQueueStarted !== nextMonthKey && getWhatsAppStatus().status === 'CONNECTED') {
-        const { competency } = ensureCompetencySchedule(current.add(1, 'month').startOf('month'));
-        const administrator = db.prepare(`SELECT id FROM users WHERE role='ADMIN' AND active=1 ORDER BY id LIMIT 1`).get();
-        generateOrdinaryAssignments({ competencyId: competency.id, userId: administrator?.id ?? null, reason: 'Retomada automática do próximo mês' });
-        if (administrator) await startOpenedMonthQueue({ competency, monthKey: nextMonthKey, administrator });
-      }
     }
-    await maybeOpenThirdColumnRound();
     await sendMarkingReminder();
   } finally {
     automationRunning = false;

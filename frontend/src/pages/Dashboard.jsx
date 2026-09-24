@@ -28,7 +28,7 @@ export default function Dashboard() {
       <div className="dispatch-actions dispatch-actions-four">
         <article><span className="dispatch-icon">01</span><h3>Vagas da vez</h3><p>Reenvia as vagas, menciona quem está na vez e envia o PDF.</p><button className="secondary-button" disabled={!connected || sendReminder.isPending} onClick={() => sendReminder.mutate()}>Enviar vagas agora</button></article>
         <article><span className="dispatch-icon">02</span><h3>Cronograma</h3><p>Publica a Antiguidade com o horário limite de cada militar.</p><button className="secondary-button" disabled={!connected || sendSchedule.isPending} onClick={() => sendSchedule.mutate()}>Enviar cronograma</button></article>
-        <article className="featured"><span className="dispatch-icon">03</span><h3>Abrir próximo mês</h3><p>Envia PDF, cronograma e inicia a fila da 2ª coluna.</p><button disabled={!connected || sendMonthly.isPending} onClick={() => sendMonthly.mutate()}>Enviar próximo mês</button></article>
+        <article className="featured"><span className="dispatch-icon">03</span><h3>Abrir próximo mês</h3><p>Gera a escala e envia o PDF. A fila é iniciada separadamente com data e coluna.</p><button disabled={!connected || sendMonthly.isPending} onClick={() => sendMonthly.mutate()}>Enviar próximo mês</button></article>
         <article><span className="dispatch-icon">04</span><h3>Escala de amanhã</h3><p>Publica os confirmados e as vagas do próximo dia.</p><button className="secondary-button" disabled={!connected || sendDaily.isPending} onClick={() => sendDaily.mutate()}>Enviar escala de amanhã</button></article>
       </div>
       {result && <p className={result.sent ? 'success' : 'error'}>{result.sent ? 'Mensagem enviada ao grupo.' : result.reason}</p>}
