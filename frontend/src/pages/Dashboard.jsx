@@ -2,7 +2,7 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import { api } from '../api/client.js';
 
 const labels = {
-  eligible_members: ['Militares aptos', 'Ativos e autorizados para marcar', '◉'],
+  eligible_members: ['Militares aptos', 'Autorizados para marcar extras', '◉'],
   vacant_days: ['Dias com vagas', 'Datas que ainda possuem espaço', '□'],
   available_vacancies: ['Vagas disponíveis', 'Posições abertas para marcação', '+'],
   coverage_percent: ['Escala preenchida', 'Cobertura do mês em operação', '✓']

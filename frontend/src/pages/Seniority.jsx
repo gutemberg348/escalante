@@ -10,7 +10,7 @@ const parts = (value) => {
   return { date: local.slice(0, 10), time: local.slice(11, 16) };
 };
 const deadline = (value) => value?.date && value?.time ? `${value.date}T${value.time}` : null;
-const isEligible = (member) => Boolean(member.active) && member.operational_status === 'ACTIVE' && member.authorization_status === 'AUTHORIZED';
+const isEligible = (member) => Boolean(member.active) && ['ACTIVE', 'VACATION'].includes(member.operational_status) && member.authorization_status === 'AUTHORIZED';
 const memberName = (member) => `${member.rank} ${member.operational_name}`;
 const displayDeadline = (value) => `${value.date.split('-').reverse().join('/')} às ${value.time}`;
 const formatDateTime = (value) => value ? new Date(value).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : 'não informado';

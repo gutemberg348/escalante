@@ -109,10 +109,10 @@ Somente "12h" não define o turno; escreva dia ou noite.
    @Escalante mostrar cronograma
    Também mostram o cronograma. O erro comum "conrograma" é aceito.
 
-   /iniciar cronograma dia 25/10/2026 2ª coluna
-   /começar cronograma dia 25/10/2026 2ª coluna
-   @Escalante iniciar cronograma dia 25/10/2026 2ª coluna
-   @Escalante começar cronograma dia 25/10/2026 2ª coluna
+   /iniciar cronograma dia 25/09/2026 2ª coluna
+   /começar cronograma dia 25/09/2026 2ª coluna
+   @Escalante iniciar cronograma dia 25/09/2026 2ª coluna
+   @Escalante começar cronograma dia 25/09/2026 2ª coluna
    Inicia ou reinicia a fila usando a ordem e os horários da página Antiguidade.
    A data e a coluna são obrigatórias. A fila começa às 06h da data informada.
    A mensagem informa o mês, que a marcação iniciou, a coluna e a data.
@@ -135,7 +135,7 @@ Somente "12h" não define o turno; escreva dia ou noite.
    @Escalante
    ESCALA DE OUTUBRO
    A marcação pode iniciar agora
-   25/10/2026
+   Sexta-feira – 25/09/2026
    2ª coluna
    1. Sub Ten G. Souza — até 08h
    2. Sgt Fragoso — até 09h
@@ -144,15 +144,17 @@ Somente "12h" não define o turno; escreva dia ou noite.
    Nesse formato, o bot identifica o mês gerado, a coluna, a data, os militares
    e os horários. A primeira data informada é o dia em que a fila começa, sempre
    às 06h. Se a lista for enviada antes, ela ficará programada e ninguém poderá
-   marcar antes desse horário. Exemplo: enviada no dia 24 com a data 25/10/2026,
-   a fila começará em 25/10/2026 às 06h. Ele preenche os prazos e inicia a fila
+   marcar antes desse horário. Exemplo: a escala de outubro pode ter o cronograma
+   enviado no dia 24 com início em 25/09/2026. Nesse caso, a fila começará em
+   25/09/2026 às 06h. Ele preenche os prazos e inicia a fila
    no horário programado. Todos os militares e prazos devem ficar no mesmo dia.
    Para outra data ou coluna, envie um novo comando ou um novo cronograma.
    A lista pode conter somente os militares que participarão daquela rodada,
    respeitando entre eles a ordem da página Antiguidade. Quem não for enviado
    fica fora da fila e poderá marcar quando a rodada terminar e a marcação ficar
-   livre. Se a lista ainda tiver alguém de férias, licença, afastado, desativado
-   ou não autorizado, esse nome será ignorado e não impedirá o início da fila.
+   livre. Militar de férias continua participando normalmente da fila, pois pode
+   marcar serviços extras. Quem estiver de licença, afastado, desativado ou não
+   autorizado continuará aparecendo no /cronograma, mas será ignorado na fila.
    Para a 3ª ou a 4ª coluna, abra a coluna antes de enviar a lista.
 
    /escala
@@ -281,35 +283,24 @@ Para sair de férias e voltar ao serviço ativo:
    /ativo @Militar
    /voltar-ferias @Militar
 
-Férias, licença e afastado mantêm o cadastro, mas impedem novas marcações e
-retiram o militar das próximas gerações ordinárias enquanto durar a situação.
-Desativado também desativa o cadastro. Ativo libera novamente o militar, sem
-alterar a autorização. Se o militar estava com a vez aberta, a fila avança.
+Férias mantêm o militar liberado para marcar serviços extras e participar do
+cronograma, mas o retiram da escala ordinária enquanto durar a situação.
+Licença, afastado e desativado impedem novas marcações. Ativo libera novamente
+o militar, sem alterar a autorização.
 
 Ao colocar um militar de férias, o bot atua na escala atualmente selecionada:
 remove os serviços ordinários dele, reorganiza as posições sem deixar espaços
 vazios e envia o PDF atualizado. Exemplo: se ele ocupava a 1ª posição, quem
 estava na 2ª passa para a 1ª.
 
-Se o militar possuir serviços extras, nada será alterado no primeiro pedido.
-O bot solicitará uma destas confirmações. Basta responder à mensagem dele com:
+Os serviços extras já marcados são sempre mantidos. Não existe confirmação para
+retirar extras ao colocar de férias. O bot atualiza a situação, reorganiza apenas
+as posições ordinárias e envia o PDF atualizado.
 
-   RETIRAR
-   MANTER
-
-RETIRAR remove os serviços ordinários e extras da escala selecionada.
-MANTER remove somente os ordinários. Sem extras, as férias são aplicadas
-imediatamente e o PDF atualizado é enviado.
-
-Depois de aplicar a mudança, o bot responde somente que a situação foi atualizada.
-Os detalhes sobre ordinários e extras não aparecem na confirmação. A pergunta
-RETIRAR ou MANTER aparece apenas quando realmente existirem serviços extras.
-
-Essa mesma regra é aplicada ao trocar a situação pela página Efetivo. O painel
-pergunta se os extras devem ser mantidos ou retirados, reorganiza as posições e
-baixa o PDF atualizado. Ao mudar de Férias, Licença, Afastado ou Desativado para
-Ativo, a escala selecionada é regerada para recalcular os serviços ordinários;
-os serviços extras permanecem preservados.
+Essa mesma regra é aplicada ao trocar a situação pela página Efetivo: somente os
+ordinários são removidos e os extras permanecem. Ao voltar ao status Ativo, a
+escala selecionada é regerada para recalcular os serviços ordinários; os serviços
+extras continuam preservados.
 
 
 2. MESES E PDF

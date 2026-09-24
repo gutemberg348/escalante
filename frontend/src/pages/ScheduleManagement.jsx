@@ -30,7 +30,9 @@ export default function ScheduleManagement() {
     enabled: Boolean(competencyId)
   });
   const editable = ['ADMIN', 'SCHEDULER'].includes(me?.role);
-  const eligibleMembers = useMemo(() => members.filter((member) => member.active && member.operational_status === 'ACTIVE' && member.authorization_status === 'AUTHORIZED'), [members]);
+  const eligibleMembers = useMemo(() => members.filter((member) => member.active
+    && (member.operational_status === 'ACTIVE' || (selectedServiceType === 'EXTRAORDINARY' && member.operational_status === 'VACATION'))
+    && member.authorization_status === 'AUTHORIZED'), [members, selectedServiceType]);
   const slots = schedule?.items || [];
   const days = useMemo(() => {
     const grouped = new Map();

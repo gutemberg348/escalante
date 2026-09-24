@@ -6,7 +6,7 @@ import { env } from '../config/env.js';
 import { audit, db, now } from '../database/index.js';
 import { buildSchedulePdf } from './schedule-pdf.js';
 import { parseMarkingRequest } from './marking-choices.js';
-import { applyVacationToCompetency, vacationImpact } from '../scheduling/member-status.js';
+import { applyVacationToCompetency } from '../scheduling/member-status.js';
 import { regenerateOrdinaryAssignments } from '../scheduling/monthly.js';
 export { parseNaturalChoices } from './marking-choices.js';
 
@@ -28,7 +28,6 @@ const markingWeekdayNames = ['Domingo', 'Segunda-feira', 'Terça-feira', 'Quarta
 // Horário diário em que uma rodada programada do cronograma começa.
 // Altere somente este valor caso a regra deixe de ser 06h.
 const markingRoundStartHour = 6;
-const pendingVacationSettingKey = 'bot_pending_vacation_confirmation';
 
 function configuredGroupJids() {
   const legacyGroup = readSetting('whatsapp_group_jid');
@@ -480,12 +479,12 @@ function parseMarkingScheduleCommand(value) {
 function parseMarkingScheduleStartDetails(value, competency) {
   const normalized = normalizeMentionLabel(value).replace(/[ªº]/g, 'A');
   const columnMatch = normalized.match(/\b([234])\s*A?\s*(?:COLUNA|POSICAO)\b/);
-  if (!columnMatch) return { error: 'Informe a coluna. Exemplo: *iniciar cronograma dia 25/10/2026, 2ª coluna*.' };
+  if (!columnMatch) return { error: 'Informe a coluna. Exemplo: *iniciar cronograma dia 25/09/2026, 2ª coluna*.' };
   const completeDate = normalized.match(/\b([0-3]?\d)\/(0?\d|1[0-2])\/(20\d{2})\b/);
   const shortDate = !completeDate ? normalized.match(/\b([0-3]?\d)\/(0?\d|1[0-2])\b/) : null;
   const dayOnly = !completeDate && !shortDate ? normalized.match(/\bDIA\s+([0-3]?\d)\b/) : null;
   if (!completeDate && !shortDate && !dayOnly) {
-    return { error: 'Informe a data de início. Exemplo: *iniciar cronograma dia 25/10/2026, 2ª coluna*.' };
+    return { error: 'Informe a data de início. Exemplo: *iniciar cronograma dia 25/09/2026, 2ª coluna*.' };
   }
   const day = Number(completeDate?.[1] ?? shortDate?.[1] ?? dayOnly?.[1]);
   const month = Number(completeDate?.[2] ?? shortDate?.[2] ?? competency.month);
@@ -493,7 +492,6 @@ function parseMarkingScheduleStartDetails(value, competency) {
   const date = dayjs(`${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`);
   const canonical = `${String(day).padStart(2, '0')}/${String(month).padStart(2, '0')}/${year}`;
   if (!date.isValid() || date.format('DD/MM/YYYY') !== canonical) return { error: `A data ${canonical} é inválida.` };
-  if (month !== competency.month || year !== competency.year) return { error: `A data precisa pertencer a ${competency.name}.` };
   const startsAt = date.startOf('day').hour(markingRoundStartHour).minute(0).second(0).millisecond(0);
   if (date.endOf('day').isBefore(dayjs())) return { error: 'A data de início já passou.' };
   return { column: Number(columnMatch[1]), date: date.format('YYYY-MM-DD'), startsAt, error: null };
@@ -506,9 +504,6 @@ export function parseMemberStatusCommand(value) {
   if (/[()]/.test(original)) return null;
   const normalized = normalizeMentionLabel(original).replace(/^\/+/, '').trim();
   if (!normalized) return null;
-  const keepExtras = /\b(?:NAO\s+(?:RETIRAR|REMOVER|EXCLUIR|APAGAR)|MANTER|MANTENHA|PRESERVAR|PRESERVE)\s+(?:OS?\s+)?EXTRAS?\b/.test(normalized);
-  const removeExtras = !keepExtras && /\b(?:RETIRAR|RETIRE|REMOVER|REMOVA|EXCLUIR|EXCLUA|APAGAR|APAGUE)\s+(?:OS?\s+)?EXTRAS?\b/.test(normalized);
-  const extraAction = keepExtras ? 'KEEP' : removeExtras ? 'REMOVE' : null;
   const statusText = normalized.replace(/\b(?:(?:NAO\s+)?(?:RETIRAR|RETIRE|REMOVER|REMOVA|EXCLUIR|EXCLUA|APAGAR|APAGUE)|MANTER|MANTENHA|PRESERVAR|PRESERVE)\s+(?:OS?\s+)?EXTRAS?\b/g, ' ').replace(/\s+/g, ' ').trim();
   const returnFromVacation = /\b(?:VOLTAR|VOLTE|VOLTOU|RETORNAR|RETORNE|RETORNOU|SAIR|SAIA|SAIU)\b/.test(statusText)
     && /\bFERIAS\b/.test(statusText);
@@ -519,16 +514,9 @@ export function parseMemberStatusCommand(value) {
 
   if (/\b(?:DESATIVAR|DESATIVE|DESATIVAD[OA]|INATIV[OA])\b/.test(statusText)) return { status: 'INACTIVE' };
   if (returnFromVacation || /\b(?:REATIVAR|REATIVE|ATIVAR|ATIVE|ATIV[OA])\b/.test(statusText)) return { status: 'ACTIVE' };
-  if (/\bFERIAS\b/.test(statusText)) return extraAction ? { status: 'VACATION', extraAction } : { status: 'VACATION' };
+  if (/\bFERIAS\b/.test(statusText)) return { status: 'VACATION' };
   if (/\bLICENCA\b/.test(statusText)) return { status: 'LEAVE' };
   if (/\b(?:AFASTAR|AFASTE|AFASTAD[OA])\b/.test(statusText)) return { status: 'AWAY' };
-  return null;
-}
-
-function parseVacationConfirmation(value) {
-  const normalized = normalizeMentionLabel(value).replace(/^\/+/, '').trim();
-  if (/^(?:RETIRAR|RETIRE|REMOVER|REMOVA|EXCLUIR|EXCLUA|APAGAR|APAGUE)(?:\s+(?:OS?\s+)?EXTRAS?)?$/.test(normalized)) return 'REMOVE';
-  if (/^(?:MANTER|MANTENHA|PRESERVAR|PRESERVE|NAO\s+(?:RETIRAR|REMOVER|EXCLUIR|APAGAR))(?:\s+(?:OS?\s+)?EXTRAS?)?$/.test(normalized)) return 'KEEP';
   return null;
 }
 
@@ -554,6 +542,12 @@ export function parseMarkingSchedulePlan(value) {
       if (!candidate.isValid() || candidate.format('DD/MM/YYYY') !== `${String(Number(dateMatch[1])).padStart(2, '0')}/${String(Number(dateMatch[2])).padStart(2, '0')}/${dateMatch[3]}`) {
         return { error: `A data ${dateMatch[0]} é inválida.` };
       }
+      const weekdayWords = ['DOMINGO', 'SEGUNDA', 'TERCA', 'QUARTA', 'QUINTA', 'SEXTA', 'SABADO'];
+      const normalizedLine = normalizeMentionLabel(line);
+      const informedWeekday = weekdayWords.findIndex((weekday) => new RegExp(`\\b${weekday}(?:-?FEIRA)?\\b`).test(normalizedLine));
+      if (informedWeekday >= 0 && informedWeekday !== candidate.day()) {
+        return { error: `${dateMatch[0]} cai em ${markingWeekdayNames[candidate.day()]}, não em ${markingWeekdayNames[informedWeekday]}. Corrija a data ou o dia da semana.` };
+      }
       currentDate = candidate.format('YYYY-MM-DD');
     }
     const row = line.match(schedulePlanRowPattern);
@@ -570,8 +564,9 @@ export function parseMarkingSchedulePlan(value) {
   const scheduleDates = new Set(entries.map((entry) => dayjs(entry.deadlineAt).format('YYYY-MM-DD')));
   if (scheduleDates.size !== 1) return { error: 'O cronograma deve terminar no mesmo dia em que começou. Para outro dia, envie um novo cronograma com data e coluna.' };
   const firstDeadline = dayjs(entries[0].deadlineAt);
-  if (firstDeadline.month() + 1 !== month) return { error: 'O mês do título não corresponde à primeira data do cronograma.' };
-  return { month, year: firstDeadline.year(), column: Number(columnMatch[1]), entries, error: null };
+  const explicitScaleYear = heading[2] ? Number(heading[2]) : null;
+  const scaleYear = explicitScaleYear ?? (firstDeadline.month() + 1 > month ? firstDeadline.year() + 1 : firstDeadline.year());
+  return { month, year: scaleYear, column: Number(columnMatch[1]), entries, error: null };
 }
 
 function parseColumnCommand(value) {
@@ -816,15 +811,14 @@ export async function handleIncomingMessages(socket, { messages }) {
     const markingScheduleRequest = parseMarkingScheduleCommand(directText);
     const markingSchedulePlan = parseMarkingSchedulePlan(directMultilineText);
     const memberStatusRequest = parseMemberStatusCommand(directText);
-    const vacationConfirmation = parseVacationConfirmation(directText);
-    const groupAdministrator = columnRequest || (markingScheduleRequest && markingScheduleRequest.action !== 'SHOW') || markingSchedulePlan || memberStatusRequest || vacationConfirmation
+    const groupAdministrator = columnRequest || (markingScheduleRequest && markingScheduleRequest.action !== 'SHOW') || markingSchedulePlan || memberStatusRequest
       ? await senderIsGroupAdministrator(socket, message)
       : false;
     const multiTargetRequest = directTarget.targets?.length > 1 && isDelegatedMarkingText(directText);
     const quotedCandidate = quotedMemberRequest(socket, message);
     const hasDirectMarkingRequest = directChoices.length > 0 || Boolean(directSelection.error)
       || isDelegatedMarkingText(directText) || isDelegatedRemovalText(directText) || isAssignmentChangeText(directText)
-      || Boolean(memberStatusRequest) || Boolean(vacationConfirmation);
+      || Boolean(memberStatusRequest);
     // Ao responder a mensagem de um militar, um pedido novo sem outro @militar
     // usa o autor citado como alvo. Um @militar explícito continua prioritário.
     const quotedTargetIdentity = !directTarget.required && hasDirectMarkingRequest && quotedCandidate
@@ -834,7 +828,7 @@ export async function handleIncomingMessages(socket, { messages }) {
     // and only calling the bot still delegates to the original author.
     const hasDirectRequest = directTarget.required || directChoices.length > 0 || Boolean(directSelection.error)
       || directText.startsWith('/') || isDelegatedMarkingText(directText) || isDelegatedRemovalText(directText)
-      || isAssignmentChangeText(directText) || Boolean(markingSchedulePlan) || Boolean(memberStatusRequest) || Boolean(vacationConfirmation);
+      || isAssignmentChangeText(directText) || Boolean(markingSchedulePlan) || Boolean(memberStatusRequest);
     const quotedRequest = hasDirectRequest ? null : quotedCandidate;
     const effectiveBody = quotedRequest?.body ?? body;
     const explicitSlash = effectiveBody.startsWith('/');
@@ -1056,7 +1050,7 @@ Outros atalhos:
 */minhas* - suas marcações
 */horas @pessoa* - horas e horários confirmados de um militar
 */cronograma* - mostra a ordem e o horário limite de cada militar
-*@Escalante iniciar cronograma dia 25/10/2026 2ª coluna* - programa a fila (somente administrador do grupo)
+*@Escalante iniciar cronograma dia 25/09/2026 2ª coluna* - programa a fila (somente administrador do grupo)
 */parar cronograma* - encerra a fila e deixa a marcação livre (somente administrador do grupo)
 */escala* - recebe a escala em PDF
 */meses* - mostra os meses gerados e qual está ativo
@@ -1070,6 +1064,7 @@ Comandos para administradores do grupo:
 *@Escalante coloque @militar de férias* - altera para férias
 *@Escalante deixar @militar ativo* - tira de férias e volta para ativo
 *@Escalante voltar @militar das férias* - também volta para ativo
+Férias retiram somente os ordinários; os extras são mantidos e continuam liberados.
 Também aceita *licença*, *afastado* e *desativado*.
 *@Escalante abrir 3ª coluna* - abre no mês inteiro
 *@Escalante abrir 4ª coluna dia 17* - abre somente nessa data
@@ -1168,6 +1163,7 @@ async function saveAndStartMarkingSchedulePlan(plan, requestedBy) {
     memberByLabel.set(label, member);
   }
   const scheduled = [];
+  const displayedSchedule = [];
   const usedMembers = new Set();
   const skippedMembers = [];
   for (const entry of plan.entries) {
@@ -1175,7 +1171,8 @@ async function saveAndStartMarkingSchedulePlan(plan, requestedBy) {
     if (!member) return `Não encontrei *${entry.name}* na Antiguidade exatamente como informado.`;
     if (usedMembers.has(member.id)) return `O militar *${member.rank} ${member.operational_name}* aparece mais de uma vez no cronograma.`;
     usedMembers.add(member.id);
-    if (member.active !== 1 || member.operational_status !== 'ACTIVE' || member.authorization_status !== 'AUTHORIZED') {
+    displayedSchedule.push({ member, deadlineAt: entry.deadlineAt });
+    if (member.active !== 1 || !['ACTIVE', 'VACATION'].includes(member.operational_status) || member.authorization_status !== 'AUTHORIZED') {
       skippedMembers.push(member);
       continue;
     }
@@ -1198,18 +1195,18 @@ async function saveAndStartMarkingSchedulePlan(plan, requestedBy) {
   const stamp = now();
   db.transaction(() => {
     db.prepare(`DELETE FROM marking_deadlines WHERE member_id IN (
-      SELECT id FROM members WHERE seniority_position IS NOT NULL AND active=1
-        AND operational_status='ACTIVE' AND authorization_status='AUTHORIZED'
+      SELECT id FROM members WHERE seniority_position IS NOT NULL
     )`).run();
     const save = db.prepare(`INSERT INTO marking_deadlines (member_id,deadline_at,updated_by,updated_at)
       VALUES (?,?,?,?) ON CONFLICT(member_id) DO UPDATE SET
       deadline_at=excluded.deadline_at,updated_by=excluded.updated_by,updated_at=excluded.updated_at`);
-    for (const item of scheduled) save.run(item.member.id, item.deadlineAt, administrator.id, stamp);
+    for (const item of displayedSchedule) save.run(item.member.id, item.deadlineAt, administrator.id, stamp);
   })();
   audit({ userId: administrator.id, action: 'WHATSAPP_IMPORT_MARKING_SCHEDULE', entityType: 'COMPETENCY', entityId: competency.id,
     after: {
       column: plan.column,
-      deadlines: scheduled.map((item) => ({ memberId: item.member.id, deadlineAt: item.deadlineAt })),
+      deadlines: displayedSchedule.map((item) => ({ memberId: item.member.id, deadlineAt: item.deadlineAt })),
+      queueMemberIds: scheduled.map((item) => item.member.id),
       skippedMemberIds: skippedMembers.map((item) => item.id)
     },
     reason: `Cronograma enviado no grupo por ${requestedBy.rank} ${requestedBy.operational_name}` });
@@ -1234,11 +1231,6 @@ async function executeCommand(member, rawBody, { explicitSlash = false, targetMe
   const [command, argument] = normalized.split(/\s+/, 2);
   if (['MENU', 'AJUDA', 'COMANDOS'].includes(command)) return commandMenu();
   if (command === 'MESES') return generatedCompetenciesMessage();
-  const vacationConfirmation = parseVacationConfirmation(commandBody);
-  if (vacationConfirmation) {
-    if (!groupAdministrator) return 'Somente administradores do grupo podem confirmar a alteração para férias.';
-    return confirmPendingVacation(vacationConfirmation, member, groupJid);
-  }
   const parseSelection = parseActiveMarkingRequest;
   const columnRequest = parseColumnCommand(commandBody);
   if (columnRequest) {
@@ -1254,7 +1246,7 @@ async function executeCommand(member, rawBody, { explicitSlash = false, targetMe
   if (memberStatusRequest) {
     if (!groupAdministrator) return 'Somente administradores do grupo podem alterar a situação de um militar.';
     if (!targetMember || !requiresTarget) return 'Marque um militar. Exemplo: *@Escalante coloque @militar de férias*.';
-    return changeMemberOperationalStatus(targetMember, memberStatusRequest.status, member, memberStatusRequest.extraAction ?? null, groupJid);
+    return changeMemberOperationalStatus(targetMember, memberStatusRequest.status, member, groupJid);
   }
   if (['JUSTIFICAR', 'JUSTIFICA', 'JUSTIFIQUE'].includes(command)) {
     const justifiedMember = targetMember ?? (!requiresTarget ? member : null);
@@ -1321,7 +1313,7 @@ async function executeCommand(member, rawBody, { explicitSlash = false, targetMe
       entityId: activeCompetency()?.id ?? '', before: { activeTurns, scheduledStart },
       after: { activeTurns: 0, scheduledStart: '' }, reason: 'Fila encerrada pelo administrador no WhatsApp' });
     if (!activeTurns && !scheduledStart) return '*MARCAÇÃO LIVRE*\n\nNão havia cronograma em andamento. A marcação já está livre.';
-    return '*CRONOGRAMA ENCERRADO*\n\nA fila foi encerrada. A marcação agora está livre para os militares ativos e autorizados.';
+    return '*CRONOGRAMA ENCERRADO*\n\nA fila foi encerrada. A marcação agora está livre para os militares autorizados, inclusive quem está de férias.';
   }
   if (markingScheduleRequest?.action === 'START') {
     if (!groupAdministrator) return 'Somente administradores do grupo podem iniciar ou reiniciar a fila do cronograma.';
@@ -1436,8 +1428,7 @@ export async function buildMarkingSchedule({ competencyId = null, column = null,
   if (!competency) return null;
   const members = db.prepare(`SELECT m.id,m.rank,m.operational_name,m.seniority_position,m.phone_number,m.whatsapp_jid,d.deadline_at
     FROM members m JOIN marking_deadlines d ON d.member_id=m.id
-    WHERE m.seniority_position IS NOT NULL AND m.active=1 AND m.operational_status='ACTIVE'
-      AND m.authorization_status='AUTHORIZED' ORDER BY m.seniority_position`).all();
+    WHERE m.seniority_position IS NOT NULL ORDER BY m.seniority_position`).all();
   if (!members.length) return null;
   const activeColumn = Number(column || readSetting('bot_active_marking_column') || 2);
   const sections = [];
@@ -1482,7 +1473,7 @@ async function turnAnnouncement(change, reason) {
     if (change.needsSchedule) {
       return { type: 'TEXT', text: `*CRONOGRAMA PENDENTE*\n\nA vez de *${change.previous.rank} ${change.previous.operational_name}* foi encerrada, mas o próximo militar não possui data e horário cadastrados. O escalante deve ajustar a página Antiguidade.`, mentions: [] };
     }
-    return { type: 'TEXT', text: '*RODADA DE MARCAÇÃO ENCERRADA*\n\nA fila desta data terminou. A marcação agora está livre para os militares ativos e autorizados. Outra data ou coluna só começará com um novo comando do administrador.', mentions: [] };
+    return { type: 'TEXT', text: '*RODADA DE MARCAÇÃO ENCERRADA*\n\nA fila desta data terminou. A marcação agora está livre para os militares autorizados, inclusive quem está de férias. Outra data ou coluna só começará com um novo comando do administrador.', mentions: [] };
   }
   return buildMarkingReminder(change.next);
 }
@@ -1492,7 +1483,7 @@ function advanceMarkingTurn(expectedMemberId) {
   if (!previous || previous.member_id !== expectedMemberId) return null;
   const next = db.prepare(`SELECT m.id,m.rank,m.operational_name,m.seniority_position,m.phone_number,m.whatsapp_jid,d.deadline_at
     FROM members m JOIN marking_deadlines d ON d.member_id=m.id
-    WHERE m.seniority_position>? AND m.active=1 AND m.operational_status='ACTIVE'
+    WHERE m.seniority_position>? AND m.active=1 AND m.operational_status IN ('ACTIVE','VACATION')
       AND m.authorization_status='AUTHORIZED'
     ORDER BY m.seniority_position LIMIT 1`).get(previous.seniority_position);
   const nextDeadline = next?.deadline_at ?? null;
@@ -1520,77 +1511,18 @@ async function resultWithNextTurn(member, text, reason = 'MARKED') {
   return { ...announcement, text: `${text}\n\n${announcement.text}` };
 }
 
-function readPendingVacation() {
-  try {
-    const pending = JSON.parse(readSetting(pendingVacationSettingKey) || 'null');
-    return pending && Number.isInteger(Number(pending.memberId)) ? pending : null;
-  } catch {
-    return null;
-  }
-}
-
-function clearPendingVacation(userId = null) {
-  writeSetting(pendingVacationSettingKey, '', userId);
-}
-
-async function confirmPendingVacation(extraAction, requestedBy, groupJid) {
-  const pending = readPendingVacation();
-  if (!pending) return 'Não há uma confirmação de férias pendente. Envie primeiro *@Escalante férias @Militar*.';
-  if (pending.groupJid && groupJid && pending.groupJid !== groupJid) return 'Essa confirmação de férias pertence a outro grupo.';
-  if (!pending.expiresAt || !dayjs(pending.expiresAt).isAfter(dayjs())) {
-    clearPendingVacation();
-    return 'A confirmação de férias expirou. Envie novamente *@Escalante férias @Militar*.';
-  }
-  const competency = activeCompetency();
-  if (!competency || Number(pending.competencyId) !== Number(competency.id)) {
-    clearPendingVacation();
-    return 'A escala selecionada mudou. Envie novamente *@Escalante férias @Militar*.';
-  }
-  const targetMember = db.prepare('SELECT * FROM members WHERE id=?').get(Number(pending.memberId));
-  if (!targetMember) {
-    clearPendingVacation();
-    return 'O militar da confirmação pendente não foi encontrado.';
-  }
-  clearPendingVacation();
-  return changeMemberOperationalStatus(targetMember, 'VACATION', requestedBy, extraAction, groupJid);
-}
-
-async function changeMemberOperationalStatus(targetMember, status, requestedBy, extraAction = null, groupJid = null) {
+async function changeMemberOperationalStatus(targetMember, status, requestedBy, groupJid = null) {
   const current = db.prepare('SELECT * FROM members WHERE id=?').get(targetMember.id);
   if (!current) return 'Militar não encontrado no efetivo.';
   const administrator = db.prepare(`SELECT id FROM users WHERE role='ADMIN' AND active=1 ORDER BY id LIMIT 1`).get();
   if (!administrator) return 'Administrador do sistema não encontrado.';
   const competency = activeCompetency();
-  const vacationAssignments = status === 'VACATION' && competency
-    ? vacationImpact({ memberId: current.id, competencyId: competency.id })
-    : { ordinaryAssignments: 0, extraordinaryAssignments: 0 };
-  if (vacationAssignments.extraordinaryAssignments && !extraAction) {
-    writeSetting(pendingVacationSettingKey, JSON.stringify({
-      memberId: current.id,
-      competencyId: competency.id,
-      groupJid,
-      expiresAt: dayjs().add(30, 'minute').toISOString()
-    }), administrator.id);
-    return `⚠️ *CONFIRME AS FÉRIAS DE ${current.rank.toUpperCase()} ${current.operational_name.toUpperCase()}*
-
-Na escala selecionada (${competency.name}), esse militar possui ${vacationAssignments.extraordinaryAssignments} serviço(s) extra(s).
-
-Para remover os ordinários e também os extras, responda:
-*RETIRAR*
-
-Para remover somente os ordinários e manter os extras, responda:
-*MANTER*
-
-Nada foi alterado ainda. A confirmação vale por 30 minutos.`;
-  }
-  if (status === 'VACATION') clearPendingVacation(administrator.id);
   const active = status === 'INACTIVE' ? 0 : 1;
   const stamp = now();
   const vacationResult = status === 'VACATION' && competency
     ? applyVacationToCompetency({
       memberId: current.id,
       competencyId: competency.id,
-      extraAction,
       userId: administrator.id,
       reason: `Férias aplicadas pelo WhatsApp por ${requestedBy.rank} ${requestedBy.operational_name}`
     })
@@ -1633,7 +1565,9 @@ Nada foi alterado ainda. A confirmação vale por 30 minutos.`;
     })
     : null;
   const response = `*SITUAÇÃO ATUALIZADA*\n${current.rank} ${current.operational_name}: ${operationalLabel[status]}.`;
-  const result = status === 'ACTIVE' ? response : await resultWithNextTurn(current, response, 'STATUS_CHANGED');
+  const result = ['LEAVE', 'AWAY', 'INACTIVE'].includes(status)
+    ? await resultWithNextTurn(current, response, 'STATUS_CHANGED')
+    : response;
   if ((status !== 'VACATION' && !reactivationGeneration) || !competency) return result;
   const pdf = await schedulePdfMessage();
   return typeof result === 'string'
@@ -2139,7 +2073,7 @@ function memberHoursMessage(member) {
 }
 
 function eligible(member) {
-  return member.active === 1 && member.operational_status === 'ACTIVE' && member.authorization_status === 'AUTHORIZED';
+  return member.active === 1 && ['ACTIVE', 'VACATION'].includes(member.operational_status) && member.authorization_status === 'AUTHORIZED';
 }
 
 function memberHourLimit(member, competency) {

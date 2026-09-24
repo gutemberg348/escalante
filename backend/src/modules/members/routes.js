@@ -18,8 +18,7 @@ const memberSchema = z.object({
   ordinary_eligible: z.boolean().optional(), notes: z.string().optional().nullable()
 });
 const memberPatchSchema = memberSchema.partial().extend({
-  competency_id: z.coerce.number().int().positive().optional().nullable(),
-  vacation_extra_action: z.enum(['KEEP', 'REMOVE']).optional().nullable()
+  competency_id: z.coerce.number().int().positive().optional().nullable()
 });
 const base = `SELECT m.*, w.name AS wing_name FROM members m LEFT JOIN wings w ON w.id=m.default_wing_id`;
 
@@ -124,7 +123,7 @@ router.post('/', allow('ADMIN','SCHEDULER'), async (req, res, next) => {
 router.patch('/:id', allow('ADMIN','SCHEDULER'), async (req, res, next) => {
   try {
     const parsed = memberPatchSchema.parse(req.body);
-    const { competency_id: competencyId = null, vacation_extra_action: vacationExtraAction = null, ...input } = parsed;
+    const { competency_id: competencyId = null, ...input } = parsed;
     const old = db.prepare('SELECT * FROM members WHERE id=?').get(req.params.id);
     if (!old) return res.status(404).json({ message: 'Militar não encontrado.' });
     const competency = competencyId
@@ -160,20 +159,9 @@ router.patch('/:id', allow('ADMIN','SCHEDULER'), async (req, res, next) => {
       statusEffect = applyVacationToCompetency({
         memberId: old.id,
         competencyId: competency.id,
-        extraAction: vacationExtraAction,
         userId: req.user.id,
         reason: 'Férias aplicadas pelo painel administrativo'
       });
-      if (statusEffect.confirmationRequired) {
-        return res.status(409).json({
-          code: 'VACATION_EXTRAS_CONFIRMATION',
-          message: `${old.rank} ${old.operational_name} possui serviços extras na escala selecionada. Escolha se deseja mantê-los ou retirá-los.`,
-          impact: {
-            ordinaryAssignments: statusEffect.ordinaryAssignments,
-            extraordinaryAssignments: statusEffect.extraordinaryAssignments
-          }
-        });
-      }
     }
     db.transaction(() => {
       if (phoneChanged) db.prepare('DELETE FROM member_whatsapp_identities WHERE member_id=?').run(merged.id);

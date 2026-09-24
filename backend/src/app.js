@@ -35,7 +35,7 @@ app.get('/api/dashboard', requireAuth, (_, res) => {
       CASE WHEN (year * 12 + month) >= ? THEN (year * 12 + month) END ASC,
       year DESC, month DESC LIMIT 1`).get(currentMonthIndex, currentMonthIndex);
   const activeMembers = Number(db.prepare(`SELECT COUNT(*) AS total FROM members
-    WHERE active=1 AND operational_status='ACTIVE' AND authorization_status='AUTHORIZED'`).get().total || 0);
+    WHERE active=1 AND operational_status IN ('ACTIVE','VACATION') AND authorization_status='AUTHORIZED'`).get().total || 0);
   if (!competency) return res.json({ competency: null, cards: { eligible_members: activeMembers, vacant_days: 0, available_vacancies: 0, coverage_percent: 0 } });
   const metrics = db.prepare(`SELECT
     COUNT(DISTINCT CASE WHEN confirmed_count < current_capacity AND status='OPEN' AND homologated_at IS NULL THEN service_date END) AS vacant_days,

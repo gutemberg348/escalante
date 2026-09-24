@@ -26,8 +26,8 @@ function manualSlot(slotId) {
 
 function eligibleMember(memberId) {
   const member = db.prepare(`SELECT * FROM members WHERE id=? AND active=1
-    AND operational_status='ACTIVE' AND authorization_status='AUTHORIZED'`).get(memberId);
-  if (!member) throw new Error('Selecione um militar ativo e autorizado.');
+    AND operational_status IN ('ACTIVE','VACATION') AND authorization_status='AUTHORIZED'`).get(memberId);
+  if (!member) throw new Error('Selecione um militar autorizado e apto para serviços extras.');
   return member;
 }
 
@@ -144,6 +144,10 @@ router.put('/:slotId/positions/:positionNumber', allow('ADMIN', 'SCHEDULER'), (r
       return res.status(204).end();
     }
     const member = eligibleMember(memberId);
+    const resultingServiceType = serviceType || existing?.service_type || 'EXTRAORDINARY';
+    if (member.operational_status === 'VACATION' && resultingServiceType === 'ORDINARY') {
+      return res.status(409).json({ message: 'Militar de férias pode ocupar somente serviço extra.' });
+    }
     const duplicate = db.prepare(`SELECT id FROM assignments WHERE service_slot_id=? AND member_id=? AND status='CONFIRMED' AND id<>?`).get(slotId, memberId, existing?.id ?? 0);
     if (duplicate) return res.status(409).json({ message: 'Este militar já está confirmado neste turno.' });
     let assignment;
@@ -199,10 +203,14 @@ router.patch('/assignments/:id/type', allow('ADMIN', 'SCHEDULER'), (req, res, ne
   try {
     const assignmentId = z.coerce.number().int().positive().parse(req.params.id);
     const { serviceType } = z.object({ serviceType: z.enum(['ORDINARY', 'EXTRAORDINARY']) }).parse(req.body);
-    const before = db.prepare(`SELECT a.*,s.status AS slot_status,s.homologated_at FROM assignments a
-      JOIN service_slots s ON s.id=a.service_slot_id WHERE a.id=? AND a.status='CONFIRMED'`).get(assignmentId);
+    const before = db.prepare(`SELECT a.*,s.status AS slot_status,s.homologated_at,m.operational_status FROM assignments a
+      JOIN service_slots s ON s.id=a.service_slot_id JOIN members m ON m.id=a.member_id
+      WHERE a.id=? AND a.status='CONFIRMED'`).get(assignmentId);
     if (!before) return res.status(404).json({ message: 'Marcação não encontrada.' });
     if (before.slot_status !== 'OPEN' || before.homologated_at) return res.status(400).json({ message: 'Não é possível alterar um horário fechado ou homologado.' });
+    if (before.operational_status === 'VACATION' && serviceType === 'ORDINARY') {
+      return res.status(409).json({ message: 'Militar de férias pode ocupar somente serviço extra.' });
+    }
     db.prepare('UPDATE assignments SET service_type=?,updated_at=? WHERE id=?').run(serviceType, now(), assignmentId);
     const item = db.prepare('SELECT * FROM assignments WHERE id=?').get(assignmentId);
     audit({ userId: req.user.id, action: 'MANUAL_ASSIGNMENT_TYPE_CHANGE', entityType: 'ASSIGNMENT', entityId: assignmentId, before, after: item, req });

@@ -14,13 +14,13 @@ const membersQuery = `SELECT m.id,m.rank,m.operational_name,m.seniority_position
 const activeTurn = () => db.prepare(`SELECT t.id,t.member_id,t.deadline_at,t.created_at,m.rank,m.operational_name,m.seniority_position
   FROM marking_turns t JOIN members m ON m.id=t.member_id WHERE t.active=1 ORDER BY t.created_at DESC LIMIT 1`).get() ?? null;
 const eligibleMembers = () => db.prepare(`SELECT id,rank,operational_name,seniority_position,active,operational_status,authorization_status FROM members
-  WHERE seniority_position IS NOT NULL AND active=1 AND operational_status='ACTIVE' AND authorization_status='AUTHORIZED'
+  WHERE seniority_position IS NOT NULL AND active=1 AND operational_status IN ('ACTIVE','VACATION') AND authorization_status='AUTHORIZED'
   ORDER BY seniority_position`).all();
 
 const deadlineItemSchema = z.object({ memberId: z.number().int().positive(), deadlineAt: z.string().min(16).nullable() });
 const memberName = (member) => `${member.rank} ${member.operational_name}`;
 const formatDeadline = (value) => new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(value));
-const isEligible = (member) => Boolean(member.active) && member.operational_status === 'ACTIVE' && member.authorization_status === 'AUTHORIZED';
+const isEligible = (member) => Boolean(member.active) && ['ACTIVE', 'VACATION'].includes(member.operational_status) && member.authorization_status === 'AUTHORIZED';
 
 function seniorityPayload() {
   const turn = activeTurn();

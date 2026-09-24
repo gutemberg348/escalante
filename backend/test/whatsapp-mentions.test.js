@@ -439,8 +439,8 @@ test('only a group administrator can open a schedule column', async () => {
 
 test('status parser recognizes management variants but not parenthetical justifications', () => {
   assert.deepEqual(parseMemberStatusCommand('coloque de férias'), { status: 'VACATION' });
-  assert.deepEqual(parseMemberStatusCommand('férias retirar extras'), { status: 'VACATION', extraAction: 'REMOVE' });
-  assert.deepEqual(parseMemberStatusCommand('férias manter os extras'), { status: 'VACATION', extraAction: 'KEEP' });
+  assert.deepEqual(parseMemberStatusCommand('férias retirar extras'), { status: 'VACATION' });
+  assert.deepEqual(parseMemberStatusCommand('férias manter os extras'), { status: 'VACATION' });
   assert.deepEqual(parseMemberStatusCommand('ponha de licença'), { status: 'LEAVE' });
   assert.deepEqual(parseMemberStatusCommand('afastar'), { status: 'AWAY' });
   assert.deepEqual(parseMemberStatusCommand('deixar ativo'), { status: 'ACTIVE' });
@@ -496,18 +496,12 @@ test('vacation removes ordinary duties, compacts positions and sends the updated
   assert.ok(replies.some((reply) => reply.document && reply.mimetype === 'application/pdf'));
 });
 
-test('vacation asks before touching extras and can keep them', async () => {
+test('vacation immediately removes only ordinary duties and always keeps extras', async () => {
   socket.groupMetadata = async () => ({ participants: [{ id: sender, admin: 'admin' }] });
   addConfirmedAssignment({ memberId: 18, day: 20, period: 'DIURNO', serviceType: 'ORDINARY' });
   addConfirmedAssignment({ memberId: 18, day: 21, period: 'NOTURNO', serviceType: 'EXTRAORDINARY' });
 
   await receive('@Escalante férias @Alex', [bot, alex]);
-
-  assert.match(replies.at(-1).text, /Nada foi alterado ainda/i);
-  assert.equal(db.prepare('SELECT operational_status FROM members WHERE id=18').get().operational_status, 'ACTIVE');
-  assert.equal(db.prepare('SELECT COUNT(*) total FROM assignments WHERE member_id=18').get().total, 2);
-
-  await receive('@Escalante férias @Alex manter extras', [bot, alex]);
 
   assert.equal(db.prepare('SELECT operational_status FROM members WHERE id=18').get().operational_status, 'VACATION');
   assert.deepEqual(db.prepare('SELECT service_type FROM assignments WHERE member_id=18').all(), [
@@ -517,22 +511,17 @@ test('vacation asks before touching extras and can keep them', async () => {
   assert.ok(replies.every((reply) => !/Ordinários removidos|Extras mantidos|Extras removidos/i.test(reply.text ?? '')));
 });
 
-test('replying only RETIRAR confirms vacation and removes extraordinary duties', async () => {
+test('a member on vacation can mark new extraordinary duties', async () => {
   socket.groupMetadata = async () => ({ participants: [{ id: sender, admin: 'superadmin' }] });
-  addConfirmedAssignment({ memberId: 18, day: 21, period: 'NOTURNO', serviceType: 'EXTRAORDINARY' });
-
   await receive('@Escalante férias @Alex', [bot, alex]);
-  assert.match(replies.at(-1).text, /responda:\n\*RETIRAR\*/i);
-
-  await receive('retirar', [], {
-    participant: bot,
-    quotedMessage: { conversation: 'Confirme as férias respondendo RETIRAR ou MANTER.' }
-  });
+  await receive('@Escalante marque @Alex dia 21 noite', [bot, alex]);
 
   assert.equal(db.prepare('SELECT operational_status FROM members WHERE id=18').get().operational_status, 'VACATION');
-  assert.equal(db.prepare('SELECT COUNT(*) total FROM assignments WHERE member_id=18').get().total, 0);
-  assert.ok(replies.some((reply) => /SITUAÇÃO ATUALIZADA/i.test(reply.text ?? '')));
-  assert.ok(replies.every((reply) => !/Ordinários removidos|Extras mantidos|Extras removidos/i.test(reply.text ?? '')));
+  assert.deepEqual(db.prepare(`SELECT s.service_date,s.period,a.service_type FROM assignments a
+    JOIN service_slots s ON s.id=a.service_slot_id WHERE a.member_id=?`).all(18), [
+    { service_date: `${futureYear}-09-21`, period: 'NOTURNO', service_type: 'EXTRAORDINARY' }
+  ]);
+  assert.match(replies.at(-1).text, /RESULTADO DA MARCAÇÃO/i);
 });
 
 test('returning a member from vacation by natural WhatsApp command regenerates the selected scale and sends its PDF', async () => {
@@ -677,6 +666,30 @@ A marcação pode iniciar agora
   assert.equal(new Date(plan.entries[2].deadlineAt).getDate(), 25);
 });
 
+test('an October scale can have its marking schedule on the previous September', () => {
+  const plan = parseMarkingSchedulePlan(`ESCALA DE OUTUBRO
+A marcação pode iniciar agora
+Sexta-feira – 25/09/2026
+2ª coluna
+1. Sgt Remetente — até 08h
+2. Sgt Alex — até 09h`);
+
+  assert.equal(plan.error, null);
+  assert.equal(plan.month, 10);
+  assert.equal(plan.year, 2026);
+  assert.match(plan.entries[0].deadlineAt, /^2026-09-25T/);
+});
+
+test('a pasted schedule rejects a weekday that does not match its date', () => {
+  const plan = parseMarkingSchedulePlan(`ESCALA DE OUTUBRO
+A marcação pode iniciar agora
+Sexta-feira – 25/10/2026
+2ª coluna
+1. Sgt Remetente — até 08h`);
+
+  assert.match(plan.error, /25\/10\/2026 cai em Domingo, não em Sexta-feira/i);
+});
+
 test('a pasted schedule cannot continue automatically on a second date', () => {
   const plan = parseMarkingSchedulePlan(`ESCALA DE SETEMBRO
 A marcação pode iniciar agora
@@ -728,7 +741,7 @@ A marcação pode iniciar agora
   assert.equal(db.prepare('SELECT member_id FROM marking_turns WHERE active=1').get().member_id, 19);
 });
 
-test('a member on vacation in the pasted schedule is skipped without blocking the queue', async () => {
+test('a member on vacation remains in the pasted schedule and marking queue', async () => {
   socket.groupMetadata = async () => ({ participants: [{ id: sender, admin: 'admin' }] });
   db.prepare("UPDATE members SET operational_status='VACATION' WHERE id=18").run();
 
@@ -745,8 +758,11 @@ A marcação pode iniciar agora
   assert.match(replies.at(-1).text, /CRONOGRAMA (?:PROGRAMADO|INICIADO)|Horários do cronograma salvos/i);
   assert.deepEqual(db.prepare('SELECT member_id FROM marking_deadlines ORDER BY deadline_at').all(), [
     { member_id: 1 },
+    { member_id: 18 },
     { member_id: 19 }
   ]);
+  const displayed = await buildMarkingSchedule({ competencyId: competency.id, column: 2 });
+  assert.match(displayed.text, /Sgt Alex — até 09h/);
 });
 
 test('starting the schedule is recognized and restricted to group administrators', async () => {

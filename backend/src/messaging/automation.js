@@ -63,7 +63,7 @@ function scheduleRows(competencyId, empty = false) {
 function eligibleMembers() {
   return db.prepare(`SELECT m.id,m.seniority_position,d.deadline_at
     FROM members m JOIN marking_deadlines d ON d.member_id=m.id
-    WHERE m.seniority_position IS NOT NULL AND m.active=1 AND m.operational_status='ACTIVE'
+    WHERE m.seniority_position IS NOT NULL AND m.active=1 AND m.operational_status IN ('ACTIVE','VACATION')
       AND m.authorization_status='AUTHORIZED' ORDER BY m.seniority_position`).all();
 }
 

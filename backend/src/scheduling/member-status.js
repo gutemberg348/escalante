@@ -12,11 +12,9 @@ export function vacationImpact({ memberId, competencyId }) {
   };
 }
 
-export function applyVacationToCompetency({ memberId, competencyId, extraAction = null, userId = null, reason = 'Alteração para férias' }) {
+export function applyVacationToCompetency({ memberId, competencyId, userId = null, reason = 'Alteração para férias' }) {
   const impact = vacationImpact({ memberId, competencyId });
-  if (impact.extraordinaryAssignments && !extraAction) return { confirmationRequired: true, ...impact };
-  const assignmentsToRemove = impact.assignments.filter((assignment) =>
-    assignment.service_type === 'ORDINARY' || extraAction === 'REMOVE');
+  const assignmentsToRemove = impact.assignments.filter((assignment) => assignment.service_type === 'ORDINARY');
   const affectedSlotIds = [...new Set(assignmentsToRemove.map((assignment) => assignment.service_slot_id))];
   const stamp = now();
   db.transaction(() => {
@@ -34,8 +32,8 @@ export function applyVacationToCompetency({ memberId, competencyId, extraAction 
   const result = {
     confirmationRequired: false,
     ordinaryAssignmentsRemoved: impact.ordinaryAssignments,
-    extraordinaryAssignmentsRemoved: extraAction === 'REMOVE' ? impact.extraordinaryAssignments : 0,
-    extraordinaryAssignmentsKept: extraAction === 'KEEP' ? impact.extraordinaryAssignments : 0,
+    extraordinaryAssignmentsRemoved: 0,
+    extraordinaryAssignmentsKept: impact.extraordinaryAssignments,
     affectedSlots: affectedSlotIds.length
   };
   audit({ userId, memberId, action: 'APPLY_MEMBER_VACATION_TO_SCHEDULE', entityType: 'COMPETENCY', entityId: competencyId,
