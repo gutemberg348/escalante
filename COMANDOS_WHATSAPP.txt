@@ -272,7 +272,12 @@ Para sair de férias e voltar ao serviço ativo:
    @Escalante reativar @Militar
    @Escalante deixar @Militar ativo
    @Escalante colocar @Militar ativo
+   @Escalante voltar @Militar das férias
+   @Escalante @Militar voltar das férias
+   @Escalante retorne @Militar das férias
+   @Escalante sair das férias @Militar
    /ativo @Militar
+   /voltar-ferias @Militar
 
 Férias, licença e afastado mantêm o cadastro, mas impedem novas marcações e
 retiram o militar das próximas gerações ordinárias enquanto durar a situação.

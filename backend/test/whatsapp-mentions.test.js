@@ -444,6 +444,9 @@ test('status parser recognizes management variants but not parenthetical justifi
   assert.deepEqual(parseMemberStatusCommand('ponha de licença'), { status: 'LEAVE' });
   assert.deepEqual(parseMemberStatusCommand('afastar'), { status: 'AWAY' });
   assert.deepEqual(parseMemberStatusCommand('deixar ativo'), { status: 'ACTIVE' });
+  assert.deepEqual(parseMemberStatusCommand('voltar das férias'), { status: 'ACTIVE' });
+  assert.deepEqual(parseMemberStatusCommand('retorne das férias'), { status: 'ACTIVE' });
+  assert.deepEqual(parseMemberStatusCommand('/voltar-ferias'), { status: 'ACTIVE' });
   assert.deepEqual(parseMemberStatusCommand('/desativado'), { status: 'INACTIVE' });
   assert.equal(parseMemberStatusCommand('dia 17 noite (licença)'), null);
 });
@@ -532,11 +535,11 @@ test('replying only RETIRAR confirms vacation and removes extraordinary duties',
   assert.ok(replies.every((reply) => !/Ordinários removidos|Extras mantidos|Extras removidos/i.test(reply.text ?? '')));
 });
 
-test('returning a member to active by WhatsApp regenerates the selected scale and sends its PDF', async () => {
+test('returning a member from vacation by natural WhatsApp command regenerates the selected scale and sends its PDF', async () => {
   socket.groupMetadata = async () => ({ participants: [{ id: sender, admin: 'admin' }] });
   db.prepare("UPDATE members SET operational_status='VACATION' WHERE id=18").run();
 
-  await receive('@Escalante deixar @Alex ativo', [bot, alex]);
+  await receive('@Escalante voltar @Alex das férias', [bot, alex]);
 
   assert.equal(db.prepare('SELECT operational_status FROM members WHERE id=18').get().operational_status, 'ACTIVE');
   assert.ok(replies.some((reply) => /SITUAÇÃO ATUALIZADA/i.test(reply.text ?? '')));
@@ -602,6 +605,7 @@ test('a started schedule announces the queue and adds a new date heading when de
   assert.match(schedule.text, /2\. Sgt Alex — até 09h/);
   assert.match(schedule.text, /26\/09\/\d{4}/);
   assert.match(schedule.text, /3\. Sgt Outro — até 08h/);
+  assert.doesNotMatch(schedule.text, /REGRA DA RODADA|fila vale somente/i);
 });
 
 test('a future schedule date announces 06:00 as the beginning instead of saying it starts now', async () => {

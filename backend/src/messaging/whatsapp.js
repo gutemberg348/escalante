@@ -510,13 +510,15 @@ export function parseMemberStatusCommand(value) {
   const removeExtras = !keepExtras && /\b(?:RETIRAR|RETIRE|REMOVER|REMOVA|EXCLUIR|EXCLUA|APAGAR|APAGUE)\s+(?:OS?\s+)?EXTRAS?\b/.test(normalized);
   const extraAction = keepExtras ? 'KEEP' : removeExtras ? 'REMOVE' : null;
   const statusText = normalized.replace(/\b(?:(?:NAO\s+)?(?:RETIRAR|RETIRE|REMOVER|REMOVA|EXCLUIR|EXCLUA|APAGAR|APAGUE)|MANTER|MANTENHA|PRESERVAR|PRESERVE)\s+(?:OS?\s+)?EXTRAS?\b/g, ' ').replace(/\s+/g, ' ').trim();
+  const returnFromVacation = /\b(?:VOLTAR|VOLTE|VOLTOU|RETORNAR|RETORNE|RETORNOU|SAIR|SAIA|SAIU)\b/.test(statusText)
+    && /\bFERIAS\b/.test(statusText);
   const directStatus = /^(?:DE\s+)?(?:FERIAS|LICENCA|AFASTAD[OA]|ATIV[OA]|INATIV[OA]|DESATIVAD[OA])(?:\s+POR\s+FAVOR)?$/.test(statusText);
   const managementAction = memberStatusManagementPattern.test(statusText);
-  const explicitAction = /\b(?:AFASTAR|AFASTE|ATIVAR|ATIVE|REATIVAR|REATIVE|DESATIVAR|DESATIVE)\b/.test(statusText);
+  const explicitAction = returnFromVacation || /\b(?:AFASTAR|AFASTE|ATIVAR|ATIVE|REATIVAR|REATIVE|DESATIVAR|DESATIVE)\b/.test(statusText);
   if (!directStatus && !managementAction && !explicitAction) return null;
 
   if (/\b(?:DESATIVAR|DESATIVE|DESATIVAD[OA]|INATIV[OA])\b/.test(statusText)) return { status: 'INACTIVE' };
-  if (/\b(?:REATIVAR|REATIVE|ATIVAR|ATIVE|ATIV[OA])\b/.test(statusText)) return { status: 'ACTIVE' };
+  if (returnFromVacation || /\b(?:REATIVAR|REATIVE|ATIVAR|ATIVE|ATIV[OA])\b/.test(statusText)) return { status: 'ACTIVE' };
   if (/\bFERIAS\b/.test(statusText)) return extraAction ? { status: 'VACATION', extraAction } : { status: 'VACATION' };
   if (/\bLICENCA\b/.test(statusText)) return { status: 'LEAVE' };
   if (/\b(?:AFASTAR|AFASTE|AFASTAD[OA])\b/.test(statusText)) return { status: 'AWAY' };
@@ -1067,6 +1069,7 @@ Outros atalhos:
 Comandos para administradores do grupo:
 *@Escalante coloque @militar de férias* - altera para férias
 *@Escalante deixar @militar ativo* - tira de férias e volta para ativo
+*@Escalante voltar @militar das férias* - também volta para ativo
 Também aceita *licença*, *afastado* e *desativado*.
 *@Escalante abrir 3ª coluna* - abre no mês inteiro
 *@Escalante abrir 4ª coluna dia 17* - abre somente nessa data
@@ -1207,9 +1210,9 @@ async function saveAndStartMarkingSchedulePlan(plan, requestedBy) {
     startsAt: startsAt.toISOString() });
   if (!result.started) return `Horários do cronograma salvos, mas a fila não foi iniciada: ${result.reason}`;
   if (result.scheduled) {
-    return `*CRONOGRAMA PROGRAMADO*\n${competency.name} — ${plan.column}ª coluna.\nInício: ${startsAt.format('DD/MM/YYYY [às] HH:mm')}.\n\nA fila vale somente para essa data e coluna. Ao terminar, a marcação ficará livre.`;
+    return `*CRONOGRAMA PROGRAMADO*\n${competency.name} — ${plan.column}ª coluna.\nInício: ${startsAt.format('DD/MM/YYYY [às] HH:mm')}.`;
   }
-  return `*CRONOGRAMA INICIADO*\n${competency.name} — ${plan.column}ª coluna.\n\nA fila vale somente para essa data e coluna. Ao terminar, a marcação ficará livre.`;
+  return `*CRONOGRAMA INICIADO*\n${competency.name} — ${plan.column}ª coluna.`;
 }
 
 async function executeCommand(member, rawBody, { explicitSlash = false, targetMember = null, requiresTarget = false, groupAdministrator = false, groupJid = null } = {}) {
@@ -1334,8 +1337,8 @@ async function executeCommand(member, rawBody, { explicitSlash = false, targetMe
     });
     if (!result.started) return `Não foi possível iniciar o cronograma: ${result.reason}`;
     return result.scheduled
-      ? `*CRONOGRAMA PROGRAMADO*\n${competency.name} — ${details.column}ª coluna.\nInício: ${details.startsAt.format('DD/MM/YYYY [às] HH:mm')}.\n\nA fila vale somente para essa data e coluna. Ao terminar, a marcação ficará livre.`
-      : `*CRONOGRAMA INICIADO*\n${competency.name} — ${details.column}ª coluna.\n\nA fila vale somente para essa data e coluna. Ao terminar, a marcação ficará livre.`;
+      ? `*CRONOGRAMA PROGRAMADO*\n${competency.name} — ${details.column}ª coluna.\nInício: ${details.startsAt.format('DD/MM/YYYY [às] HH:mm')}.`
+      : `*CRONOGRAMA INICIADO*\n${competency.name} — ${details.column}ª coluna.`;
   }
   if (markingScheduleRequest?.action === 'SHOW') {
     return await buildMarkingSchedule() ?? 'Não há cronograma completo cadastrado na Antiguidade.';
@@ -1448,7 +1451,7 @@ export async function buildMarkingSchedule({ competencyId = null, column = null,
     : `*CRONOGRAMA DA ESCALA DE ${monthName}*`;
   return {
     type: 'TEXT',
-    text: `${heading}\n\n${sections.join('\n\n')}${started ? '\n\n*REGRA DA RODADA*\nEsta fila vale somente para a data e coluna informadas. Ao terminar o último militar, a marcação fica livre.' : ''}`,
+    text: `${heading}\n\n${sections.join('\n\n')}`,
     mentions: [],
     competency,
     column: activeColumn
