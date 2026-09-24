@@ -120,6 +120,16 @@ Somente "12h" não define o turno; escreva dia ou noite.
    terminar, a marcação fica livre e não continua automaticamente no dia seguinte.
    Somente administradores do grupo podem iniciar ou reiniciar a fila.
 
+   /parar cronograma
+   /encerrar cronograma
+   @Escalante parar cronograma
+   @Escalante encerrar a fila
+   @Escalante deixar a marcação livre
+   @Escalante marcação livre
+   Encerra imediatamente a fila atual e cancela também um início que estiver
+   programado. Depois disso, a marcação fica livre para todos os militares ativos
+   e autorizados. Somente administradores do grupo podem encerrar a fila.
+
    Também é possível marcar o bot e enviar o cronograma completo no mesmo formato:
 
    @Escalante
@@ -241,6 +251,7 @@ Somente administradores do grupo podem usar estes comandos.
 
    @Escalante férias @Militar
    @Escalante coloque @Militar de férias
+   @Escalante deixe @Militar de férias
    @Escalante ponha @Militar de licença
    @Escalante afastar @Militar
    @Escalante deixar @Militar ativo
@@ -253,6 +264,15 @@ Também são aceitos os atalhos com barra:
    /afastado @Militar
    /ativo @Militar
    /desativado @Militar
+
+Para sair de férias e voltar ao serviço ativo:
+
+   @Escalante ativo @Militar
+   @Escalante ativar @Militar
+   @Escalante reativar @Militar
+   @Escalante deixar @Militar ativo
+   @Escalante colocar @Militar ativo
+   /ativo @Militar
 
 Férias, licença e afastado mantêm o cadastro, mas impedem novas marcações e
 retiram o militar das próximas gerações ordinárias enquanto durar a situação.
@@ -273,6 +293,10 @@ O bot solicitará uma destas confirmações. Basta responder à mensagem dele co
 RETIRAR remove os serviços ordinários e extras da escala selecionada.
 MANTER remove somente os ordinários. Sem extras, as férias são aplicadas
 imediatamente e o PDF atualizado é enviado.
+
+Depois de aplicar a mudança, o bot responde somente que a situação foi atualizada.
+Os detalhes sobre ordinários e extras não aparecem na confirmação. A pergunta
+RETIRAR ou MANTER aparece apenas quando realmente existirem serviços extras.
 
 Essa mesma regra é aplicada ao trocar a situação pela página Efetivo. O painel
 pergunta se os extras devem ser mantidos ou retirados, reorganiza as posições e

@@ -465,9 +465,14 @@ const columnAfterNumberPattern = /\b(?:(?:3|4)\s*(?:A|ª)?|TERCEIRA|QUARTA)\s*(?
 const columnBeforeNumberPattern = /\b(?:COLUNA|POSICAO)\s*(?:(?:3|4)\s*(?:A|ª)?|TERCEIRA|QUARTA)(?=\s|[,.]|$)/;
 const markingScheduleWordPattern = /\b(?:CRONOGRAMA|CONROGRAMA|CRONOGAMA|CRONOGRMA)\b/;
 const markingScheduleStartPattern = /\b(?:INICIAR|INICIE|INICIA|INICIANDO|INICIO|REINICIAR|REINICIE|REINICIA|COMECA|COMECAR|COMECE|COMECANDO|RECOMECA|RECOMECAR|RECOMECE|DAR\s+INICIO)\b/;
+const markingScheduleStopPattern = /\b(?:PARAR|PARE|ENCERRAR|ENCERRE|FINALIZAR|FINALIZE|INTERROMPER|INTERROMPA|CANCELAR|CANCELE)\b/;
+const freeMarkingPattern = /\b(?:(?:LIBERAR|LIBERE|DEIXAR|DEIXE)\s+(?:A\s+)?MARCACAO\s+LIVRE|MARCACAO\s+LIVRE)\b/;
 
 function parseMarkingScheduleCommand(value) {
   const normalized = normalizeMentionLabel(value);
+  if (freeMarkingPattern.test(normalized)) return { action: 'STOP' };
+  if (!markingScheduleWordPattern.test(normalized) && !/\bFILA\b/.test(normalized)) return null;
+  if (markingScheduleStopPattern.test(normalized)) return { action: 'STOP' };
   if (!markingScheduleWordPattern.test(normalized)) return null;
   return { action: markingScheduleStartPattern.test(normalized) ? 'START' : 'SHOW' };
 }
@@ -810,7 +815,7 @@ export async function handleIncomingMessages(socket, { messages }) {
     const markingSchedulePlan = parseMarkingSchedulePlan(directMultilineText);
     const memberStatusRequest = parseMemberStatusCommand(directText);
     const vacationConfirmation = parseVacationConfirmation(directText);
-    const groupAdministrator = columnRequest || markingScheduleRequest?.action === 'START' || markingSchedulePlan || memberStatusRequest || vacationConfirmation
+    const groupAdministrator = columnRequest || (markingScheduleRequest && markingScheduleRequest.action !== 'SHOW') || markingSchedulePlan || memberStatusRequest || vacationConfirmation
       ? await senderIsGroupAdministrator(socket, message)
       : false;
     const multiTargetRequest = directTarget.targets?.length > 1 && isDelegatedMarkingText(directText);
@@ -1050,6 +1055,7 @@ Outros atalhos:
 */horas @pessoa* - horas e horários confirmados de um militar
 */cronograma* - mostra a ordem e o horário limite de cada militar
 *@Escalante iniciar cronograma dia 25/10/2026 2ª coluna* - programa a fila (somente administrador do grupo)
+*/parar cronograma* - encerra a fila e deixa a marcação livre (somente administrador do grupo)
 */escala* - recebe a escala em PDF
 */meses* - mostra os meses gerados e qual está ativo
 */escala 10/2026* - troca o mês ativo e envia o novo PDF
@@ -1060,7 +1066,8 @@ Outros atalhos:
 
 Comandos para administradores do grupo:
 *@Escalante coloque @militar de férias* - altera para férias
-Também aceita *licença*, *afastado*, *ativo* e *desativado*.
+*@Escalante deixar @militar ativo* - tira de férias e volta para ativo
+Também aceita *licença*, *afastado* e *desativado*.
 *@Escalante abrir 3ª coluna* - abre no mês inteiro
 *@Escalante abrir 4ª coluna dia 17* - abre somente nessa data
 *@Escalante abrir 4ª coluna exceto dias 17 e 18* - abre nos demais dias
@@ -1287,6 +1294,22 @@ async function executeCommand(member, rawBody, { explicitSlash = false, targetMe
   }
   if (command === 'STATUS' || /\bMEU STATUS\b/.test(normalized)) return `*${member.rank} ${member.operational_name}*\nSituação: ${operationalLabel[member.operational_status] ?? member.operational_status}\nAutorização: ${authorizationLabel[member.authorization_status] ?? member.authorization_status}`;
   const markingScheduleRequest = parseMarkingScheduleCommand(normalized);
+  if (markingScheduleRequest?.action === 'STOP') {
+    if (!groupAdministrator) return 'Somente administradores do grupo podem encerrar a fila do cronograma.';
+    const stamp = now();
+    const activeTurns = db.prepare('SELECT COUNT(*) total FROM marking_turns WHERE active=1').get().total;
+    const scheduledStart = readSetting('bot_marking_round_starts_at');
+    db.transaction(() => {
+      db.prepare('UPDATE marking_turns SET active=0,closed_at=? WHERE active=1').run(stamp);
+      writeSetting('bot_marking_round_starts_at', '', null);
+      writeSetting('automation_last_marking_reminder_at', '', null);
+    })();
+    audit({ memberId: member.id, action: 'BOT_MARKING_ROUND_STOP', entityType: 'MARKING_ROUND',
+      entityId: activeCompetency()?.id ?? '', before: { activeTurns, scheduledStart },
+      after: { activeTurns: 0, scheduledStart: '' }, reason: 'Fila encerrada pelo administrador no WhatsApp' });
+    if (!activeTurns && !scheduledStart) return '*MARCAÇÃO LIVRE*\n\nNão havia cronograma em andamento. A marcação já está livre.';
+    return '*CRONOGRAMA ENCERRADO*\n\nA fila foi encerrada. A marcação agora está livre para os militares ativos e autorizados.';
+  }
   if (markingScheduleRequest?.action === 'START') {
     if (!groupAdministrator) return 'Somente administradores do grupo podem iniciar ou reiniciar a fila do cronograma.';
     const competency = activeCompetency();
@@ -1596,14 +1619,7 @@ Nada foi alterado ainda. A confirmação vale por 30 minutos.`;
       reason: `Escala regerada após retorno de ${current.rank} ${current.operational_name} ao status Ativo pelo WhatsApp`
     })
     : null;
-  const vacationSummary = status === 'VACATION'
-    ? `\nOrdinários removidos: ${vacationResult?.ordinaryAssignmentsRemoved ?? 0}.`
-      + `\nExtras ${extraAction === 'REMOVE' ? 'removidos' : 'mantidos'}: ${vacationAssignments.extraordinaryAssignments}.`
-    : '';
-  const reactivationSummary = reactivationGeneration
-    ? `\nA escala ordinária de ${competency.name} foi regerada. Os extras foram preservados.`
-    : '';
-  const response = `*SITUAÇÃO ATUALIZADA*\n${current.rank} ${current.operational_name}: ${operationalLabel[status]}.${vacationSummary}${reactivationSummary}`;
+  const response = `*SITUAÇÃO ATUALIZADA*\n${current.rank} ${current.operational_name}: ${operationalLabel[status]}.`;
   const result = status === 'ACTIVE' ? response : await resultWithNextTurn(current, response, 'STATUS_CHANGED');
   if ((status !== 'VACATION' && !reactivationGeneration) || !competency) return result;
   const pdf = await schedulePdfMessage();

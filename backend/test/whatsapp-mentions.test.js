@@ -488,7 +488,8 @@ test('vacation removes ordinary duties, compacts positions and sends the updated
   assert.deepEqual(db.prepare(`SELECT member_id,position_number FROM assignments a JOIN service_slots s ON s.id=a.service_slot_id
     WHERE s.competency_id=? AND s.service_date=? AND s.period='DIURNO' ORDER BY position_number`)
     .all(competency.id, `${futureYear}-09-20`), [{ member_id: 19, position_number: 1 }]);
-  assert.ok(replies.some((reply) => /Ordinários removidos: 1/i.test(reply.text ?? '')));
+  assert.ok(replies.some((reply) => /SITUAÇÃO ATUALIZADA/i.test(reply.text ?? '')));
+  assert.ok(replies.every((reply) => !/Ordinários removidos|Extras mantidos|Extras removidos/i.test(reply.text ?? '')));
   assert.ok(replies.some((reply) => reply.document && reply.mimetype === 'application/pdf'));
 });
 
@@ -509,7 +510,8 @@ test('vacation asks before touching extras and can keep them', async () => {
   assert.deepEqual(db.prepare('SELECT service_type FROM assignments WHERE member_id=18').all(), [
     { service_type: 'EXTRAORDINARY' }
   ]);
-  assert.ok(replies.some((reply) => /Extras mantidos: 1/i.test(reply.text ?? '')));
+  assert.ok(replies.some((reply) => /SITUAÇÃO ATUALIZADA/i.test(reply.text ?? '')));
+  assert.ok(replies.every((reply) => !/Ordinários removidos|Extras mantidos|Extras removidos/i.test(reply.text ?? '')));
 });
 
 test('replying only RETIRAR confirms vacation and removes extraordinary duties', async () => {
@@ -526,7 +528,8 @@ test('replying only RETIRAR confirms vacation and removes extraordinary duties',
 
   assert.equal(db.prepare('SELECT operational_status FROM members WHERE id=18').get().operational_status, 'VACATION');
   assert.equal(db.prepare('SELECT COUNT(*) total FROM assignments WHERE member_id=18').get().total, 0);
-  assert.ok(replies.some((reply) => /Extras removidos: 1/i.test(reply.text ?? '')));
+  assert.ok(replies.some((reply) => /SITUAÇÃO ATUALIZADA/i.test(reply.text ?? '')));
+  assert.ok(replies.every((reply) => !/Ordinários removidos|Extras mantidos|Extras removidos/i.test(reply.text ?? '')));
 });
 
 test('returning a member to active by WhatsApp regenerates the selected scale and sends its PDF', async () => {
@@ -536,7 +539,8 @@ test('returning a member to active by WhatsApp regenerates the selected scale an
   await receive('@Escalante deixar @Alex ativo', [bot, alex]);
 
   assert.equal(db.prepare('SELECT operational_status FROM members WHERE id=18').get().operational_status, 'ACTIVE');
-  assert.ok(replies.some((reply) => /escala ordinária.*foi regerada/i.test(reply.text ?? '')));
+  assert.ok(replies.some((reply) => /SITUAÇÃO ATUALIZADA/i.test(reply.text ?? '')));
+  assert.ok(replies.every((reply) => !/escala ordinária.*foi regerada/i.test(reply.text ?? '')));
   assert.ok(replies.some((reply) => reply.document && reply.mimetype === 'application/pdf'));
 });
 
@@ -732,6 +736,31 @@ test('an administrator must provide the start date and column when starting a sc
   await receive('@Escalante começar cronograma', [bot]);
 
   assert.match(replies.at(-1).text, /Informe a coluna/i);
+});
+
+test('a group administrator can stop a scheduled queue and leave marking free', async () => {
+  socket.groupMetadata = async () => ({ participants: [{ id: sender, admin: 'admin' }] });
+  const futureStart = new Date(Date.now() + 86_400_000).toISOString();
+  db.prepare(`INSERT INTO marking_turns (member_id,deadline_at,active,created_by,created_at)
+    VALUES (1,?,1,1,?)`).run(futureStart, stamp);
+  setting.run('bot_marking_round_starts_at', futureStart, stamp);
+
+  await receive('@Escalante parar cronograma', [bot]);
+
+  assert.equal(db.prepare('SELECT COUNT(*) total FROM marking_turns WHERE active=1').get().total, 0);
+  assert.equal(db.prepare("SELECT value FROM system_settings WHERE key='bot_marking_round_starts_at'").get().value, '');
+  assert.match(replies.at(-1).text, /CRONOGRAMA ENCERRADO/i);
+  assert.match(replies.at(-1).text, /marcação agora está livre/i);
+});
+
+test('only a group administrator can stop the marking queue', async () => {
+  db.prepare(`INSERT INTO marking_turns (member_id,deadline_at,active,created_by,created_at)
+    VALUES (1,?,1,1,?)`).run(new Date(Date.now() + 86_400_000).toISOString(), stamp);
+
+  await receive('@Escalante deixar a marcação livre', [bot]);
+
+  assert.equal(db.prepare('SELECT COUNT(*) total FROM marking_turns WHERE active=1').get().total, 1);
+  assert.match(replies.at(-1).text, /Somente administradores do grupo podem encerrar/i);
 });
 
 test('a group administrator can open the fourth column on the whole month except selected days', async () => {
