@@ -103,20 +103,22 @@ function openPreparedMarkingSequence(competency, administratorId) {
   return true;
 }
 
-export async function startColumnMarkingRound({ competencyId, column, userId = null, reason = 'COLUMN_OPEN' }) {
+export async function startColumnMarkingRound({ competencyId, column, userId = null, reason = 'COLUMN_OPEN', rebaseDeadlines = true, startsAt = null }) {
   if (getWhatsAppStatus().status !== 'CONNECTED') return { started: false, reason: 'WhatsApp desconectado.' };
   const competency = db.prepare('SELECT * FROM competencies WHERE id=?').get(competencyId);
   if (!competency) return { started: false, reason: 'Mês não encontrado.' };
   const administratorId = userId || db.prepare(`SELECT id FROM users WHERE role='ADMIN' AND active=1 ORDER BY id LIMIT 1`).get()?.id;
   if (!administratorId) return { started: false, reason: 'Administrador não encontrado.' };
-  if (!rebaseDeadlinesForRound(administratorId)) return { started: false, reason: 'Preencha todos os horários na Antiguidade.' };
+  if (rebaseDeadlines && !rebaseDeadlinesForRound(administratorId)) return { started: false, reason: 'Preencha todos os horários na Antiguidade.' };
   if (!openPreparedMarkingSequence(competency, administratorId)) return { started: false, reason: 'Não foi possível abrir a fila.' };
+  const scheduledStart = startsAt && dayjs(startsAt).isAfter(dayjs()) ? dayjs(startsAt).toISOString() : '';
   writeSetting('bot_active_marking_column', column, administratorId);
+  writeSetting('bot_marking_round_starts_at', scheduledStart, administratorId);
   writeSetting('automation_last_marking_reminder_at', '', administratorId);
-  const schedule = await sendMarkingSchedule({ competencyId: competency.id, column });
-  const reminder = await notifyCurrentMarkingTurn();
+  const schedule = await sendMarkingSchedule({ competencyId: competency.id, column, started: true, startsAt: scheduledStart || null });
+  const reminder = scheduledStart ? false : await notifyCurrentMarkingTurn();
   writeSetting(`marking_round_${competency.id}_${column}`, `${reason}:${now()}`, administratorId);
-  return { started: true, scheduleSent: schedule.sent, reminderSent: reminder, column };
+  return { started: true, scheduled: Boolean(scheduledStart), startsAt: scheduledStart || null, scheduleSent: schedule.sent, reminderSent: reminder, column };
 }
 
 async function startOpenedMonthQueue({ competency, monthKey, administrator }) {

@@ -104,6 +104,42 @@ Somente "12h" não define o turno; escreva dia ou noite.
    /cronograma
    Mostra a ordem da antiguidade e o prazo de cada militar.
 
+   /conrograma
+   @Escalante cronograma
+   @Escalante mostrar cronograma
+   Também mostram o cronograma. O erro comum "conrograma" é aceito.
+
+   /iniciar cronograma
+   /começar cronograma
+   @Escalante iniciar cronograma
+   @Escalante começar cronograma
+   Inicia ou reinicia a fila usando a ordem e os horários da página Antiguidade.
+   A mensagem informa o mês, que a marcação iniciou, a coluna e a data.
+   Quando os horários passarem para o dia seguinte, uma nova data será mostrada
+   e a numeração continuará normalmente.
+   Somente administradores do grupo podem iniciar ou reiniciar a fila.
+
+   Também é possível marcar o bot e enviar o cronograma completo no mesmo formato:
+
+   @Escalante
+   ESCALA DE OUTUBRO
+   A marcação pode iniciar agora
+   25/10/2026
+   2ª coluna
+   1. Sub Ten G. Souza — até 08h
+   2. Sgt Fragoso — até 09h
+   3. Sgt Duarte — até 10h
+
+   Nesse formato, o bot identifica o mês gerado, a coluna, a data, os militares
+   e os horários. A primeira data informada é o dia em que a fila começa, sempre
+   às 06h. Se a lista for enviada antes, ela ficará programada e ninguém poderá
+   marcar antes desse horário. Exemplo: enviada no dia 24 com a data 25/10/2026,
+   a fila começará em 25/10/2026 às 06h. Ele preenche os prazos e inicia a fila
+   no horário programado. Pode haver uma nova
+   data no meio da lista; os militares seguintes serão programados nesse dia.
+   A lista deve conter todos os militares aptos, exatamente na ordem da página
+   Antiguidade. Para a 3ª ou a 4ª coluna, abra a coluna antes de enviar a lista.
+
    /escala
    Envia o PDF do mês ativo.
 
@@ -195,7 +231,33 @@ Esses comandos alteram somente serviços EXTRAS. Ordinários ficam protegidos.
 COMANDOS ADMINISTRATIVOS E DE GESTÃO
 ====================================
 
-1. MESES E PDF
+1. ALTERAR A SITUAÇÃO DE UM MILITAR
+-----------------------------------
+
+Somente administradores do grupo podem usar estes comandos.
+
+   @Escalante férias @Militar
+   @Escalante coloque @Militar de férias
+   @Escalante ponha @Militar de licença
+   @Escalante afastar @Militar
+   @Escalante deixar @Militar ativo
+   @Escalante desativar @Militar
+
+Também são aceitos os atalhos com barra:
+
+   /ferias @Militar
+   /licenca @Militar
+   /afastado @Militar
+   /ativo @Militar
+   /desativado @Militar
+
+Férias, licença e afastado mantêm o cadastro, mas impedem novas marcações e
+retiram o militar das próximas gerações ordinárias enquanto durar a situação.
+Desativado também desativa o cadastro. Ativo libera novamente o militar, sem
+alterar a autorização. Se o militar estava com a vez aberta, a fila avança.
+
+
+2. MESES E PDF
 --------------
 
    /meses
@@ -206,7 +268,7 @@ COMANDOS ADMINISTRATIVOS E DE GESTÃO
    Troca o mês ativo e envia o PDF correspondente.
 
 
-2. GERAR O PRÓXIMO MÊS
+3. GERAR O PRÓXIMO MÊS
 ----------------------
 
    /gerar-proximo-mes
@@ -219,7 +281,7 @@ O bot mostra o aviso antes de gerar. Para confirmar:
 O novo mês é gerado com o ciclo ordinário 1x4 e o PDF é publicado.
 
 
-3. ABRIR A 3ª OU A 4ª COLUNA
+4. ABRIR A 3ª OU A 4ª COLUNA
 ----------------------------
 
 Somente administradores do grupo podem usar estes comandos.
@@ -253,7 +315,7 @@ A 4ª coluna depende da 3ª. Ao abrir a 4ª, a 3ª permanece ou também fica abe
 Abrir uma nova coluna inicia a nova fila e publica o cronograma no grupo.
 
 
-4. FECHAR A 3ª OU A 4ª COLUNA
+5. FECHAR A 3ª OU A 4ª COLUNA
 -----------------------------
 
 Somente administradores do grupo podem usar estes comandos.

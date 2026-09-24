@@ -5,6 +5,9 @@ import { allow } from '../../middlewares/auth.js';
 import { notifyCurrentMarkingTurn } from '../../messaging/whatsapp.js';
 
 const router = Router();
+const readSetting = (key) => db.prepare('SELECT value FROM system_settings WHERE key=?').get(key)?.value ?? '';
+const writeSetting = (key, value, userId = null) => db.prepare(`INSERT INTO system_settings (key,value,updated_by,updated_at) VALUES (?,?,?,?)
+  ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_by=excluded.updated_by,updated_at=excluded.updated_at`).run(key, String(value), userId, now());
 const membersQuery = `SELECT m.id,m.rank,m.operational_name,m.seniority_position,m.unit_type,m.active,m.operational_status,m.authorization_status,d.deadline_at AS marking_deadline
   FROM members m LEFT JOIN marking_deadlines d ON d.member_id=m.id
   WHERE m.seniority_position IS NOT NULL ORDER BY m.seniority_position`;
@@ -18,6 +21,20 @@ const deadlineItemSchema = z.object({ memberId: z.number().int().positive(), dea
 const memberName = (member) => `${member.rank} ${member.operational_name}`;
 const formatDeadline = (value) => new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(value));
 const isEligible = (member) => Boolean(member.active) && member.operational_status === 'ACTIVE' && member.authorization_status === 'AUTHORIZED';
+
+function seniorityPayload() {
+  const turn = activeTurn();
+  const markingStartsAt = readSetting('bot_marking_round_starts_at') || null;
+  const markingScheduled = Boolean(turn && markingStartsAt && new Date(markingStartsAt) > new Date());
+  return {
+    items: db.prepare(membersQuery).all(),
+    turn,
+    markingMode: turn ? markingScheduled ? 'SCHEDULED' : 'SENIORITY' : 'OPEN',
+    markingScheduled,
+    markingStartsAt,
+    activeMarkingColumn: Number(readSetting('bot_active_marking_column') || 2)
+  };
+}
 
 function parseDeadlineValues(items) {
   const values = new Map();
@@ -78,8 +95,7 @@ function saveDeadlineValues(rankedIds, values, userId, stamp) {
 }
 
 router.get('/', (req, res) => {
-  const turn = activeTurn();
-  res.json({ items: db.prepare(membersQuery).all(), turn, markingMode: turn ? 'SENIORITY' : 'OPEN' });
+  res.json(seniorityPayload());
 });
 router.get('/versions', (req, res) => res.json({ items: db.prepare('SELECT * FROM seniority_versions ORDER BY version DESC').all() }));
 router.put('/', allow('ADMIN'), (req, res, next) => {
@@ -115,7 +131,7 @@ router.put('/', allow('ADMIN'), (req, res, next) => {
       db.prepare('INSERT INTO seniority_versions (version,order_json,reason,created_by,created_at) VALUES (?,?,?,?,?)').run(version, JSON.stringify(memberIds), reason, req.user.id, stamp);
     })();
     audit({ userId: req.user.id, action: 'REORDER', entityType: 'SENIORITY', entityId: 'current', before: current, after: { memberIds, deadlines: deadlines ?? undefined }, reason, req });
-    res.json({ items: db.prepare(membersQuery).all(), turn: activeTurn() });
+    res.json(seniorityPayload());
   } catch (error) { next(error); }
 });
 
@@ -137,7 +153,7 @@ router.put('/deadlines', allow('ADMIN'), (req, res, next) => {
       if (activeDeadline) db.prepare('UPDATE marking_turns SET deadline_at=? WHERE id=?').run(activeDeadline, turn.id);
     })();
     audit({ userId: req.user.id, action: 'SAVE_MARKING_SCHEDULE', entityType: 'SENIORITY', entityId: 'deadlines', after: items, req });
-    res.json({ items: db.prepare(membersQuery).all(), turn: activeTurn() });
+    res.json(seniorityPayload());
   } catch (error) { next(error); }
 });
 
@@ -151,6 +167,7 @@ router.post('/turn/start', allow('ADMIN'), async (req, res, next) => {
     const { first, skippedCount } = selected;
     const deadline = new Date(deadlines.get(first.id));
     db.prepare('INSERT INTO marking_turns (member_id,deadline_at,active,created_by,created_at) VALUES (?,?,1,?,?)').run(first.id, deadline.toISOString(), req.user.id, now());
+    writeSetting('bot_marking_round_starts_at', '', req.user.id);
     const turn = activeTurn();
     audit({ userId: req.user.id, action: 'START_MARKING_TURN', entityType: 'SENIORITY', entityId: String(turn.id), after: { memberId: first.id, deadlineAt: deadline.toISOString(), skippedExpired: skippedCount }, req });
     let notificationSent = false; try { notificationSent = await notifyCurrentMarkingTurn(); } catch (error) { req.log?.warn({ err: error }, 'Vez aberta sem envio ao WhatsApp.'); }
@@ -175,6 +192,7 @@ router.post('/turn/reset', allow('ADMIN'), async (req, res, next) => {
       db.prepare('UPDATE marking_turns SET active=0,closed_at=? WHERE active=1').run(stamp);
       db.prepare('INSERT INTO marking_turns (member_id,deadline_at,active,created_by,created_at) VALUES (?,?,1,?,?)').run(first.id, deadlineAt, req.user.id, stamp);
     })();
+    writeSetting('bot_marking_round_starts_at', '', req.user.id);
     const turn = activeTurn();
     audit({ userId: req.user.id, action: 'RESET_MARKING_TURN', entityType: 'SENIORITY', entityId: String(turn.id), after: { memberId: first.id, deadlineAt, ignoredBefore: startIndex }, req });
     let notificationSent = false;
@@ -188,6 +206,7 @@ router.delete('/turn', allow('ADMIN'), (req, res) => {
     db.prepare('UPDATE marking_turns SET active=0,closed_at=? WHERE id=?').run(now(), previous.id);
     audit({ userId: req.user.id, action: 'CLOSE_MARKING_TURN', entityType: 'SENIORITY', entityId: String(previous.id), before: previous, after: { markingMode: 'OPEN' }, reason: 'Fila encerrada; marcação livre habilitada', req });
   }
+  writeSetting('bot_marking_round_starts_at', '', req.user.id);
   res.json({ turn: null, markingMode: 'OPEN', message: 'Fila encerrada. Qualquer militar ativo e autorizado pode marcar.' });
 });
 export default router;

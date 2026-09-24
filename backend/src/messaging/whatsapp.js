@@ -9,7 +9,7 @@ import { parseMarkingRequest } from './marking-choices.js';
 export { parseNaturalChoices } from './marking-choices.js';
 
 const authDirectory = path.resolve(path.dirname(env.DATABASE_PATH), 'whatsapp-auth');
-const commandHandlerVersion = 'mentions-v8-column-exceptions';
+const commandHandlerVersion = 'mentions-v10-member-status';
 const connection = {
   socket: null, saveCreds: null, status: 'DISCONNECTED', qrDataUrl: null, qrIssued: false,
   phoneNumber: null, error: null, reconnectTimer: null, reconnectAttempts: 0,
@@ -22,6 +22,7 @@ const isManualConnectionStop = () => readSetting('whatsapp_manual_stop') === '1'
 const periodLabel = (period) => period === 'DIURNO' ? 'Dia' : 'Noite';
 const operationalLabel = { ACTIVE: 'Ativo', VACATION: 'Férias', LEAVE: 'Licença', AWAY: 'Afastado', INACTIVE: 'Desativado' };
 const authorizationLabel = { AUTHORIZED: 'Autorizado', PENDING: 'Pendente', SUSPENDED: 'Suspenso', NOT_AUTHORIZED: 'Não autorizado' };
+const markingWeekdayNames = ['Domingo', 'Segunda-feira', 'Terça-feira', 'Quarta-feira', 'Quinta-feira', 'Sexta-feira', 'Sábado'];
 
 function configuredGroupJids() {
   const legacyGroup = readSetting('whatsapp_group_jid');
@@ -307,6 +308,14 @@ function withoutBotMention(body) {
   return body.replace(/@\S+/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
+function withoutBotMentionPreservingLines(body) {
+  return body.replace(/@\S+/g, ' ')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join('\n');
+}
+
 function normalizeMentionLabel(value) {
   return String(value ?? '').toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').trim();
 }
@@ -448,6 +457,74 @@ const columnOpenActionPattern = /\b(?:ABRIR|ABRA|ABRE|LIBERAR|LIBERE|LIBERA|DEST
 const columnCloseActionPattern = /\b(?:FECHAR|FECHE|FECHA|TRANCAR|TRANQUE|TRANCA)\b/;
 const columnAfterNumberPattern = /\b(?:(?:3|4)\s*(?:A|ª)?|TERCEIRA|QUARTA)\s*(?:COLUNA|POSICAO)(?=\s|[,.]|$)/;
 const columnBeforeNumberPattern = /\b(?:COLUNA|POSICAO)\s*(?:(?:3|4)\s*(?:A|ª)?|TERCEIRA|QUARTA)(?=\s|[,.]|$)/;
+const markingScheduleWordPattern = /\b(?:CRONOGRAMA|CONROGRAMA|CRONOGAMA|CRONOGRMA)\b/;
+const markingScheduleStartPattern = /\b(?:INICIAR|INICIE|INICIA|INICIANDO|INICIO|REINICIAR|REINICIE|REINICIA|COMECA|COMECAR|COMECE|COMECANDO|RECOMECA|RECOMECAR|RECOMECE|DAR\s+INICIO)\b/;
+
+function parseMarkingScheduleCommand(value) {
+  const normalized = normalizeMentionLabel(value);
+  if (!markingScheduleWordPattern.test(normalized)) return null;
+  return { action: markingScheduleStartPattern.test(normalized) ? 'START' : 'SHOW' };
+}
+
+const memberStatusManagementPattern = /\b(?:COLOCA|COLOCAR|COLOQUE|POE|POR|PONHA|DEIXA|DEIXAR|DEIXE|MUDA|MUDAR|MUDE|ALTERA|ALTERAR|ALTERE)\b/;
+
+export function parseMemberStatusCommand(value) {
+  const original = String(value ?? '');
+  if (/[()]/.test(original)) return null;
+  const normalized = normalizeMentionLabel(original).replace(/^\/+/, '').trim();
+  if (!normalized) return null;
+  const directStatus = /^(?:DE\s+)?(?:FERIAS|LICENCA|AFASTAD[OA]|ATIV[OA]|INATIV[OA]|DESATIVAD[OA])(?:\s+POR\s+FAVOR)?$/.test(normalized);
+  const managementAction = memberStatusManagementPattern.test(normalized);
+  const explicitAction = /\b(?:AFASTAR|AFASTE|ATIVAR|ATIVE|REATIVAR|REATIVE|DESATIVAR|DESATIVE)\b/.test(normalized);
+  if (!directStatus && !managementAction && !explicitAction) return null;
+
+  if (/\b(?:DESATIVAR|DESATIVE|DESATIVAD[OA]|INATIV[OA])\b/.test(normalized)) return { status: 'INACTIVE' };
+  if (/\b(?:REATIVAR|REATIVE|ATIVAR|ATIVE|ATIV[OA])\b/.test(normalized)) return { status: 'ACTIVE' };
+  if (/\bFERIAS\b/.test(normalized)) return { status: 'VACATION' };
+  if (/\bLICENCA\b/.test(normalized)) return { status: 'LEAVE' };
+  if (/\b(?:AFASTAR|AFASTE|AFASTAD[OA])\b/.test(normalized)) return { status: 'AWAY' };
+  return null;
+}
+
+const schedulePlanStartPattern = /\bA\s+MARCACAO\s+(?:PODE\s+)?(?:INICIAR|COMECAR)\s+AGORA\b/;
+const schedulePlanRowPattern = /^\s*(\d+)\s*[.)-]\s*(.+?)\s*[—–-]\s*(?:AT[EÉ]\s+)?(\d{1,2})(?:[:Hh](\d{2}))?\s*[Hh]?\s*$/i;
+
+export function parseMarkingSchedulePlan(value) {
+  const text = String(value ?? '').trim();
+  const normalized = normalizeMentionLabel(text);
+  const heading = normalized.match(/\bESCALA\s+DE\s+([A-Z]+)(?:\s+DE\s+(20\d{2}))?/);
+  if (!heading || !schedulePlanStartPattern.test(normalized)) return null;
+  const month = commandMonthNames.indexOf(heading[1]) + 1;
+  const columnMatch = normalized.match(/\b([234])\s*(?:A|ª)?\s+COLUNA\b/);
+  if (!month) return { error: 'Não reconheci o mês informado no cronograma.' };
+  if (!columnMatch) return { error: 'Informe no cronograma se a fila é da 2ª, 3ª ou 4ª coluna.' };
+
+  let currentDate = null;
+  const entries = [];
+  for (const line of text.split(/\r?\n/).map((item) => item.trim()).filter(Boolean)) {
+    const dateMatch = line.match(/\b([0-3]?\d)\/(0?\d|1[0-2])\/(20\d{2})\b/);
+    if (dateMatch) {
+      const candidate = dayjs(`${dateMatch[3]}-${String(Number(dateMatch[2])).padStart(2, '0')}-${String(Number(dateMatch[1])).padStart(2, '0')}`);
+      if (!candidate.isValid() || candidate.format('DD/MM/YYYY') !== `${String(Number(dateMatch[1])).padStart(2, '0')}/${String(Number(dateMatch[2])).padStart(2, '0')}/${dateMatch[3]}`) {
+        return { error: `A data ${dateMatch[0]} é inválida.` };
+      }
+      currentDate = candidate.format('YYYY-MM-DD');
+    }
+    const row = line.match(schedulePlanRowPattern);
+    if (!row) continue;
+    if (!currentDate) return { error: `Informe a data antes do militar ${row[2].trim()}.` };
+    const hour = Number(row[3]);
+    const minute = Number(row[4] ?? 0);
+    if (hour > 23 || minute > 59) return { error: `O horário informado para ${row[2].trim()} é inválido.` };
+    const deadline = dayjs(`${currentDate}T${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:00`);
+    entries.push({ number: Number(row[1]), name: row[2].trim(), deadlineAt: deadline.toISOString() });
+  }
+  if (!entries.length) return { error: 'Não encontrei a lista numerada de militares e horários no cronograma.' };
+  if (entries.some((entry, index) => entry.number !== index + 1)) return { error: 'A numeração do cronograma deve começar em 1 e seguir sem pular números.' };
+  const firstDeadline = dayjs(entries[0].deadlineAt);
+  if (firstDeadline.month() + 1 !== month) return { error: 'O mês do título não corresponde à primeira data do cronograma.' };
+  return { month, year: firstDeadline.year(), column: Number(columnMatch[1]), entries, error: null };
+}
 
 function parseColumnCommand(value) {
   const normalized = normalizeMentionLabel(value);
@@ -690,15 +767,22 @@ export async function handleIncomingMessages(socket, { messages }) {
     const originalIdentity = resolveMemberIdentity(message.key);
     if (!isAddressedToBot(socket, message, body)) continue;
     const directText = withoutBotMention(body);
+    const directMultilineText = withoutBotMentionPreservingLines(body);
     const directSelection = parseMarkingRequest(directText);
     const directChoices = directSelection.choices;
     const directTarget = await mentionedMember(socket, message);
     const columnRequest = parseColumnCommand(directText);
-    const groupAdministrator = columnRequest ? await senderIsGroupAdministrator(socket, message) : false;
+    const markingScheduleRequest = parseMarkingScheduleCommand(directText);
+    const markingSchedulePlan = parseMarkingSchedulePlan(directMultilineText);
+    const memberStatusRequest = parseMemberStatusCommand(directText);
+    const groupAdministrator = columnRequest || markingScheduleRequest?.action === 'START' || markingSchedulePlan || memberStatusRequest
+      ? await senderIsGroupAdministrator(socket, message)
+      : false;
     const multiTargetRequest = directTarget.targets?.length > 1 && isDelegatedMarkingText(directText);
     const quotedCandidate = quotedMemberRequest(socket, message);
     const hasDirectMarkingRequest = directChoices.length > 0 || Boolean(directSelection.error)
-      || isDelegatedMarkingText(directText) || isDelegatedRemovalText(directText) || isAssignmentChangeText(directText);
+      || isDelegatedMarkingText(directText) || isDelegatedRemovalText(directText) || isAssignmentChangeText(directText)
+      || Boolean(memberStatusRequest);
     // Ao responder a mensagem de um militar, um pedido novo sem outro @militar
     // usa o autor citado como alvo. Um @militar explícito continua prioritário.
     const quotedTargetIdentity = !directTarget.required && hasDirectMarkingRequest && quotedCandidate
@@ -708,11 +792,13 @@ export async function handleIncomingMessages(socket, { messages }) {
     // and only calling the bot still delegates to the original author.
     const hasDirectRequest = directTarget.required || directChoices.length > 0 || Boolean(directSelection.error)
       || directText.startsWith('/') || isDelegatedMarkingText(directText) || isDelegatedRemovalText(directText)
-      || isAssignmentChangeText(directText);
+      || isAssignmentChangeText(directText) || Boolean(markingSchedulePlan) || Boolean(memberStatusRequest);
     const quotedRequest = hasDirectRequest ? null : quotedCandidate;
     const effectiveBody = quotedRequest?.body ?? body;
     const explicitSlash = effectiveBody.startsWith('/');
-    const commandText = withoutBotMention(effectiveBody);
+    const commandText = markingSchedulePlan && !quotedRequest
+      ? directMultilineText
+      : withoutBotMention(effectiveBody);
     const identity = quotedRequest
       ? await resolveMemberIdentityWithMapping(socket, quotedRequest.key)
       : (originalIdentity.member ? originalIdentity : await resolveMemberIdentityWithMapping(socket, message.key));
@@ -926,7 +1012,8 @@ Outros atalhos:
 */status* - consulta seu cadastro
 */minhas* - suas marcações
 */horas @pessoa* - horas e horários confirmados de um militar
-*/cronograma* - ordem completa da antiguidade e o horário limite de cada militar
+*/cronograma* - mostra a ordem e o horário limite de cada militar
+*@Escalante iniciar cronograma* - inicia ou reinicia a fila (somente administrador do grupo)
 */escala* - recebe a escala em PDF
 */meses* - mostra os meses gerados e qual está ativo
 */escala 10/2026* - troca o mês ativo e envia o novo PDF
@@ -936,6 +1023,8 @@ Outros atalhos:
 */passo a vez* - não marca nesta rodada
 
 Comandos para administradores do grupo:
+*@Escalante coloque @militar de férias* - altera para férias
+Também aceita *licença*, *afastado*, *ativo* e *desativado*.
 *@Escalante abrir 3ª coluna* - abre no mês inteiro
 *@Escalante abrir 4ª coluna dia 17* - abre somente nessa data
 *@Escalante abrir 4ª coluna exceto dias 17 e 18* - abre nos demais dias
@@ -1011,6 +1100,74 @@ function nextMonthGenerationWarning() {
   return `⚠️ *CONFIRMAR GERAÇÃO DO PRÓXIMO MÊS*\n\nSerá criada a escala de *${monthName} de ${target.year()}* com o ciclo ordinário 1x4.\n\n• O mês atual não será apagado.\n• O novo PDF será publicado nos grupos.\n• O novo mês passará a ser usado pelo comando /escala.\n• A fila de marcação poderá ser iniciada.\n\nPara continuar, envie exatamente:\n*/confirmar-gerar-proximo-mes*\n\nPara desistir, não envie a confirmação.`;
 }
 
+const normalizeRosterLabel = (value) => normalizeMentionLabel(value).replace(/[^A-Z0-9]+/g, ' ').trim();
+
+async function saveAndStartMarkingSchedulePlan(plan, requestedBy) {
+  if (plan.error) return plan.error;
+  const competency = db.prepare(`SELECT * FROM competencies
+    WHERE year=? AND month=? AND generated_at IS NOT NULL`).get(plan.year, plan.month);
+  if (!competency) return `A escala de ${String(plan.month).padStart(2, '0')}/${plan.year} ainda não foi gerada.`;
+  if (plan.column > 2) {
+    const opened = db.prepare(`SELECT 1 FROM service_slots
+      WHERE competency_id=? AND current_capacity>=? LIMIT 1`).get(competency.id, plan.column);
+    if (!opened) return `A ${plan.column}ª coluna ainda não está aberta. Abra a coluna antes de iniciar este cronograma.`;
+  }
+  const members = db.prepare(`SELECT id,rank,operational_name,seniority_position
+    FROM members WHERE seniority_position IS NOT NULL AND active=1
+      AND operational_status='ACTIVE' AND authorization_status='AUTHORIZED'
+    ORDER BY seniority_position`).all();
+  if (plan.entries.length !== members.length) {
+    return `O cronograma possui ${plan.entries.length} militar(es), mas a Antiguidade possui ${members.length} apto(s). Envie a lista completa.`;
+  }
+  const memberByLabel = new Map();
+  for (const member of members) {
+    const label = normalizeRosterLabel(`${member.rank} ${member.operational_name}`);
+    if (memberByLabel.has(label)) return `Existem militares com nomes iguais na Antiguidade: ${member.rank} ${member.operational_name}.`;
+    memberByLabel.set(label, member);
+  }
+  const scheduled = [];
+  const usedMembers = new Set();
+  for (const [index, entry] of plan.entries.entries()) {
+    const member = memberByLabel.get(normalizeRosterLabel(entry.name));
+    if (!member) return `Não encontrei *${entry.name}* na Antiguidade exatamente como informado.`;
+    if (usedMembers.has(member.id)) return `O militar *${member.rank} ${member.operational_name}* aparece mais de uma vez no cronograma.`;
+    if (member.id !== members[index].id) {
+      return `A ordem está diferente da Antiguidade. Na posição ${index + 1}, o esperado é *${members[index].rank} ${members[index].operational_name}*.`;
+    }
+    usedMembers.add(member.id);
+    scheduled.push({ member, deadlineAt: entry.deadlineAt });
+  }
+  for (let index = 0; index < scheduled.length; index += 1) {
+    const deadline = new Date(scheduled[index].deadlineAt);
+    if (deadline <= new Date()) return `O horário de *${scheduled[index].member.rank} ${scheduled[index].member.operational_name}* já passou.`;
+    if (index && deadline <= new Date(scheduled[index - 1].deadlineAt)) {
+      return `O horário de *${scheduled[index].member.rank} ${scheduled[index].member.operational_name}* precisa ser posterior ao militar anterior.`;
+    }
+  }
+  const administrator = db.prepare(`SELECT id FROM users WHERE role='ADMIN' AND active=1 ORDER BY id LIMIT 1`).get();
+  if (!administrator) return 'Administrador do sistema não encontrado.';
+  const stamp = now();
+  db.transaction(() => {
+    const save = db.prepare(`INSERT INTO marking_deadlines (member_id,deadline_at,updated_by,updated_at)
+      VALUES (?,?,?,?) ON CONFLICT(member_id) DO UPDATE SET
+      deadline_at=excluded.deadline_at,updated_by=excluded.updated_by,updated_at=excluded.updated_at`);
+    for (const item of scheduled) save.run(item.member.id, item.deadlineAt, administrator.id, stamp);
+  })();
+  audit({ userId: administrator.id, action: 'WHATSAPP_IMPORT_MARKING_SCHEDULE', entityType: 'COMPETENCY', entityId: competency.id,
+    after: { column: plan.column, deadlines: scheduled.map((item) => ({ memberId: item.member.id, deadlineAt: item.deadlineAt })) },
+    reason: `Cronograma enviado no grupo por ${requestedBy.rank} ${requestedBy.operational_name}` });
+  const { startColumnMarkingRound } = await import('./automation.js');
+  const startsAt = dayjs(plan.entries[0].deadlineAt).startOf('day').hour(6).minute(0).second(0).millisecond(0);
+  const result = await startColumnMarkingRound({ competencyId: competency.id, column: plan.column,
+    userId: administrator.id, reason: `WHATSAPP_IMPORTED_SCHEDULE_BY_${requestedBy.id}`, rebaseDeadlines: false,
+    startsAt: startsAt.toISOString() });
+  if (!result.started) return `Horários do cronograma salvos, mas a fila não foi iniciada: ${result.reason}`;
+  if (result.scheduled) {
+    return `*CRONOGRAMA PROGRAMADO*\n${competency.name} — ${plan.column}ª coluna.\nInício: ${startsAt.format('DD/MM/YYYY [às] HH:mm')}.`;
+  }
+  return `*CRONOGRAMA INICIADO*\n${competency.name} — ${plan.column}ª coluna.`;
+}
+
 async function executeCommand(member, rawBody, { explicitSlash = false, targetMember = null, requiresTarget = false, groupAdministrator = false } = {}) {
   if (requiresTarget && !targetMember) return 'Não identifiquei o militar marcado. Nenhuma marcação foi feita.';
   const commandBody = rawBody.trim().replace(/^\/+/, '').trim();
@@ -1025,6 +1182,17 @@ async function executeCommand(member, rawBody, { explicitSlash = false, targetMe
   if (columnRequest) {
     if (!groupAdministrator) return 'Somente administradores do grupo podem abrir ou fechar colunas.';
     return applyColumnCommand(columnRequest, member);
+  }
+  const markingSchedulePlan = parseMarkingSchedulePlan(rawBody);
+  if (markingSchedulePlan) {
+    if (!groupAdministrator) return 'Somente administradores do grupo podem preencher horários e iniciar a fila pelo cronograma.';
+    return saveAndStartMarkingSchedulePlan(markingSchedulePlan, member);
+  }
+  const memberStatusRequest = parseMemberStatusCommand(commandBody);
+  if (memberStatusRequest) {
+    if (!groupAdministrator) return 'Somente administradores do grupo podem alterar a situação de um militar.';
+    if (!targetMember || !requiresTarget) return 'Marque um militar. Exemplo: *@Escalante coloque @militar de férias*.';
+    return changeMemberOperationalStatus(targetMember, memberStatusRequest.status, member);
   }
   if (['JUSTIFICAR', 'JUSTIFICA', 'JUSTIFIQUE'].includes(command)) {
     const justifiedMember = targetMember ?? (!requiresTarget ? member : null);
@@ -1076,7 +1244,25 @@ async function executeCommand(member, rawBody, { explicitSlash = false, targetMe
     return nextMonthGenerationWarning();
   }
   if (command === 'STATUS' || /\bMEU STATUS\b/.test(normalized)) return `*${member.rank} ${member.operational_name}*\nSituação: ${operationalLabel[member.operational_status] ?? member.operational_status}\nAutorização: ${authorizationLabel[member.authorization_status] ?? member.authorization_status}`;
-  if (command === 'CRONOGRAMA' || /\b(?:VER|MOSTRAR|MOSTRA|QUERO VER)\s+(?:O\s+)?CRONOGRAMA\b/.test(normalized)) {
+  const markingScheduleRequest = parseMarkingScheduleCommand(normalized);
+  if (markingScheduleRequest?.action === 'START') {
+    if (!groupAdministrator) return 'Somente administradores do grupo podem iniciar ou reiniciar a fila do cronograma.';
+    const competency = activeCompetency();
+    if (!competency) return 'Não há mês ativo para iniciar o cronograma.';
+    const administrator = db.prepare(`SELECT id FROM users WHERE role='ADMIN' AND active=1 ORDER BY id LIMIT 1`).get();
+    if (!administrator) return 'Administrador do sistema não encontrado.';
+    const column = Number(readSetting('bot_active_marking_column') || 2);
+    const { startColumnMarkingRound } = await import('./automation.js');
+    const result = await startColumnMarkingRound({
+      competencyId: competency.id,
+      column,
+      userId: administrator.id,
+      reason: `WHATSAPP_SCHEDULE_START_BY_${member.id}`
+    });
+    if (!result.started) return `Não foi possível iniciar o cronograma: ${result.reason}`;
+    return `*CRONOGRAMA INICIADO*\nFila iniciada na ${column}ª coluna.`;
+  }
+  if (markingScheduleRequest?.action === 'SHOW') {
     return await buildMarkingSchedule() ?? 'Não há cronograma completo cadastrado na Antiguidade.';
   }
   if (command === 'VAGAS' || /\b(?:VER|MOSTRAR|MOSTRA|QUERO VER)\s+(?:AS\s+)?VAGAS\b/.test(normalized)) return vacanciesWithPdf(member);
@@ -1124,6 +1310,17 @@ export function activeCompetency() {
   return configured ?? db.prepare(`SELECT * FROM competencies WHERE generated_at IS NOT NULL ORDER BY year DESC,month DESC LIMIT 1`).get() ?? null;
 }
 
+function pendingMarkingRoundStart() {
+  const value = readSetting('bot_marking_round_starts_at');
+  if (!value) return null;
+  const start = dayjs(value);
+  return start.isValid() && start.isAfter(dayjs()) ? start : null;
+}
+
+function markingRoundWaitingMessage(start = pendingMarkingRoundStart()) {
+  return start ? `A fila de marcação começará em *${start.format('DD/MM/YYYY [às] HH:mm')}*.` : null;
+}
+
 function currentMarkingTurn() {
   return db.prepare(`SELECT t.id,t.member_id,t.deadline_at,t.created_by,m.rank,m.operational_name,m.seniority_position,m.phone_number,m.whatsapp_jid
     FROM marking_turns t JOIN members m ON m.id=t.member_id
@@ -1144,7 +1341,7 @@ async function mentionJidForMember(member) {
   }
 }
 
-export async function buildMarkingSchedule({ competencyId = null, column = null } = {}) {
+export async function buildMarkingSchedule({ competencyId = null, column = null, started = false, startsAt = null } = {}) {
   const competency = competencyId
     ? db.prepare('SELECT * FROM competencies WHERE id=?').get(competencyId)
     : activeCompetency();
@@ -1155,23 +1352,29 @@ export async function buildMarkingSchedule({ competencyId = null, column = null 
       AND m.authorization_status='AUTHORIZED' ORDER BY m.seniority_position`).all();
   if (!members.length) return null;
   const activeColumn = Number(column || readSetting('bot_active_marking_column') || 2);
-  const firstJid = await mentionJidForMember(members[0]);
-  const firstMention = firstJid ? `@${jidAccount(firstJid)}` : `*${members[0].rank} ${members[0].operational_name}*`;
-  const rows = members.map((member, index) =>
-    `${index + 1}. ${member.rank} ${member.operational_name} — até ${dayjs(member.deadline_at).format('HH:mm')}`
-  );
+  const sections = [];
+  let currentDate = null;
+  for (const [index, member] of members.entries()) {
+    const deadline = dayjs(member.deadline_at);
+    const dateKey = deadline.format('YYYY-MM-DD');
+    if (dateKey !== currentDate) {
+      currentDate = dateKey;
+      sections.push(`*${markingWeekdayNames[deadline.day()]} — ${deadline.format('DD/MM/YYYY')}*${sections.length ? '' : `\n*${activeColumn}ª coluna*`}`);
+    }
+    const timeLabel = deadline.minute() === 0 ? deadline.format('HH[h]') : deadline.format('HH[h]mm');
+    sections.push(`${index + 1}. ${member.rank} ${member.operational_name} — até ${timeLabel}`);
+  }
+  const monthName = String(competency.name).split(/\s+de\s+/i)[0].toUpperCase();
+  const scheduledStart = startsAt && dayjs(startsAt).isAfter(dayjs()) ? dayjs(startsAt) : null;
+  const heading = started
+    ? scheduledStart
+      ? `*ESCALA DE ${monthName}*\n\n*A marcação iniciará em ${scheduledStart.format('DD/MM/YYYY [às] HH:mm')}*`
+      : `*ESCALA DE ${monthName}*\n\n*A marcação pode iniciar agora*`
+    : `*CRONOGRAMA DA ESCALA DE ${monthName}*`;
   return {
     type: 'TEXT',
-    text: `*CRONOGRAMA DE MARCAÇÃO — ESCALA DE ${competency.name.toUpperCase()} (${activeColumn}ª COLUNA)*
-
-Marcação em sequência.
-
-Assim que ${firstMention} marcar, o próximo da lista já pode fazer o mesmo, sem precisar aguardar o horário limite.
-
-*HORÁRIOS DE MARCAÇÃO*
-
-${rows.join('\n\n')}`,
-    mentions: firstJid ? [firstJid] : [],
+    text: `${heading}\n\n${sections.join('\n\n')}`,
+    mentions: [],
     competency,
     column: activeColumn
   };
@@ -1226,7 +1429,42 @@ async function resultWithNextTurn(member, text, reason = 'MARKED') {
   return { ...announcement, text: `${text}\n\n${announcement.text}` };
 }
 
+async function changeMemberOperationalStatus(targetMember, status, requestedBy) {
+  const current = db.prepare('SELECT * FROM members WHERE id=?').get(targetMember.id);
+  if (!current) return 'Militar não encontrado no efetivo.';
+  const administrator = db.prepare(`SELECT id FROM users WHERE role='ADMIN' AND active=1 ORDER BY id LIMIT 1`).get();
+  if (!administrator) return 'Administrador do sistema não encontrado.';
+  const active = status === 'INACTIVE' ? 0 : 1;
+  const stamp = now();
+  db.transaction(() => {
+    db.prepare('UPDATE members SET operational_status=?,active=?,updated_at=? WHERE id=?')
+      .run(status, active, stamp, current.id);
+    const history = db.prepare(`INSERT INTO member_history
+      (member_id,field_name,old_value,new_value,changed_by,reason,changed_at) VALUES (?,?,?,?,?,?,?)`);
+    if (current.operational_status !== status) {
+      history.run(current.id, 'operational_status', current.operational_status, status, administrator.id,
+        `Alterado pelo WhatsApp por ${requestedBy.rank} ${requestedBy.operational_name}`, stamp);
+    }
+    if (Number(current.active) !== active) {
+      history.run(current.id, 'active', String(current.active), String(active), administrator.id,
+        `Alterado pelo WhatsApp por ${requestedBy.rank} ${requestedBy.operational_name}`, stamp);
+    }
+  })();
+  audit({
+    userId: administrator.id,
+    action: 'WHATSAPP_MEMBER_OPERATIONAL_STATUS_CHANGE',
+    entityType: 'MEMBER',
+    entityId: current.id,
+    before: { operationalStatus: current.operational_status, active: current.active },
+    after: { operationalStatus: status, active },
+    reason: `Alterado pelo WhatsApp por ${requestedBy.rank} ${requestedBy.operational_name}`
+  });
+  const response = `*SITUAÇÃO ATUALIZADA*\n${current.rank} ${current.operational_name}: ${operationalLabel[status]}.`;
+  return status === 'ACTIVE' ? response : resultWithNextTurn(current, response, 'STATUS_CHANGED');
+}
+
 export async function notifyCurrentMarkingTurn() {
+  if (pendingMarkingRoundStart()) return false;
   const turn = currentMarkingTurn();
   if (!turn) return false;
   const reminder = await buildMarkingReminder({ ...turn, id: turn.member_id });
@@ -1238,6 +1476,7 @@ export async function notifyCurrentMarkingTurn() {
 
 export async function advanceExpiredMarkingTurn() {
   if (connection.status !== 'CONNECTED') return false;
+  if (pendingMarkingRoundStart()) return false;
   const turn = currentMarkingTurn();
   if (!turn || !dayjs(turn.deadline_at).isBefore(dayjs())) return false;
   const announcement = await turnAnnouncement(advanceMarkingTurn(turn.member_id), 'EXPIRED');
@@ -1662,6 +1901,8 @@ async function assignNaturalChoices(member, choices, { displayPrefix = null } = 
 }
 
 async function registerPass(member) {
+  const waitingMessage = markingRoundWaitingMessage();
+  if (waitingMessage) return waitingMessage;
   const competency = activeCompetency();
   if (!competency) return 'Não há uma rodada de marcação ativa.';
   const turn = currentMarkingTurn();
@@ -1738,6 +1979,8 @@ function hourSummary(markedHours, hourLimit) {
 
 function assignFullDayWithBasePreference(member, rawSlots, displayPrefix = null) {
   if (!eligible(member)) return { error: 'Sua situação atual não permite marcação.' };
+  const waitingMessage = markingRoundWaitingMessage();
+  if (waitingMessage) return { error: waitingMessage };
   const slots = ['DIURNO', 'NOTURNO'].map((period) => rawSlots.find((slot) => slot.period === period));
   if (slots.some((slot) => !slot)) return { error: 'não existem os dois turnos nesta competência.' };
   const turn = currentMarkingTurn();
@@ -1838,6 +2081,8 @@ function assignMemberToSlot(member, rawSlotId, displayPrefix = null) {
   const slotId = Number(rawSlotId);
   if (!Number.isInteger(slotId) || slotId < 1) return 'Informe os dias desejados. Exemplo: /marcar 04; 05 noite';
   if (!eligible(member)) return 'Sua situação atual não permite marcação. Consulte STATUS ou fale com o escalante.';
+  const waitingMessage = markingRoundWaitingMessage();
+  if (waitingMessage) return waitingMessage;
   const turn = currentMarkingTurn();
   if (turn && dayjs(turn.deadline_at).isBefore(dayjs())) return `O prazo da vez de *${turn.rank} ${turn.operational_name}* encerrou em ${dayjs(turn.deadline_at).format('DD/MM [às] HH:mm')}. Aguarde o escalante abrir a próxima vez.`;
   if (turn && turn.member_id !== member.id) return `A vez de marcação é de *${turn.rank} ${turn.operational_name}* até ${dayjs(turn.deadline_at).format('DD/MM [às] HH:mm')}. Aguarde a sua vez.`;

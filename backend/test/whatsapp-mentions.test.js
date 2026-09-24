@@ -14,7 +14,7 @@ process.env.ADMIN_INITIAL_PASSWORD = 'isolated-test-password';
 const { db, now } = await import('../src/database/index.js');
 const { runMigrations } = await import('../src/database/migrations.js');
 const { ensureCompetencySchedule } = await import('../src/scheduling/monthly.js');
-const { handleIncomingMessages, parseNaturalChoices } = await import('../src/messaging/whatsapp.js');
+const { buildMarkingSchedule, handleIncomingMessages, parseMarkingSchedulePlan, parseMemberStatusCommand, parseNaturalChoices } = await import('../src/messaging/whatsapp.js');
 runMigrations();
 
 const group = '120000000000001@g.us';
@@ -46,10 +46,13 @@ beforeEach(() => {
     DELETE FROM processed_messages;
     DELETE FROM whatsapp_messages;
     DELETE FROM member_whatsapp_identities;
+    DELETE FROM marking_turns;
+    DELETE FROM marking_deadlines;
     DELETE FROM schedule_pdf_column_releases;
     UPDATE service_slots SET current_capacity=2;`);
   db.prepare("UPDATE members SET active=1,operational_status='ACTIVE',authorization_status='AUTHORIZED',ordinary_eligible=1").run();
   setting.run('bot_active_competency_id', String(competency.id), stamp);
+  setting.run('bot_marking_round_starts_at', '', stamp);
   replies = [];
   socket = {
     user: { id: bot, lid: '212000000000001@lid' },
@@ -429,6 +432,44 @@ test('only a group administrator can open a schedule column', async () => {
   assert.match(replies.at(-1).text, /Somente administradores do grupo/i);
 });
 
+test('status parser recognizes management variants but not parenthetical justifications', () => {
+  assert.deepEqual(parseMemberStatusCommand('coloque de férias'), { status: 'VACATION' });
+  assert.deepEqual(parseMemberStatusCommand('ponha de licença'), { status: 'LEAVE' });
+  assert.deepEqual(parseMemberStatusCommand('afastar'), { status: 'AWAY' });
+  assert.deepEqual(parseMemberStatusCommand('deixar ativo'), { status: 'ACTIVE' });
+  assert.deepEqual(parseMemberStatusCommand('/desativado'), { status: 'INACTIVE' });
+  assert.equal(parseMemberStatusCommand('dia 17 noite (licença)'), null);
+});
+
+test('only a group administrator can change a military status', async () => {
+  await receive('@Escalante coloque @Alex de férias', [bot, alex]);
+
+  assert.deepEqual(db.prepare('SELECT operational_status,active FROM members WHERE id=18').get(), {
+    operational_status: 'ACTIVE', active: 1
+  });
+  assert.match(replies.at(-1).text, /Somente administradores do grupo/i);
+});
+
+test('a group administrator can set vacation, leave, away, active and inactive without changing authorization', async () => {
+  socket.groupMetadata = async () => ({ participants: [{ id: sender, admin: 'admin' }] });
+  const cases = [
+    ['@Escalante férias @Alex', 'VACATION', 1],
+    ['@Escalante ponha @Alex de licença', 'LEAVE', 1],
+    ['@Escalante afastar @Alex', 'AWAY', 1],
+    ['@Escalante deixar @Alex ativo', 'ACTIVE', 1],
+    ['@Escalante desativar @Alex', 'INACTIVE', 0]
+  ];
+  for (const [text, operationalStatus, active] of cases) {
+    await receive(text, [bot, alex]);
+    assert.deepEqual(db.prepare('SELECT operational_status,authorization_status,active FROM members WHERE id=18').get(), {
+      operational_status: operationalStatus,
+      authorization_status: 'AUTHORIZED',
+      active
+    });
+    assert.match(replies.at(-1).text, /SITUAÇÃO ATUALIZADA/i);
+  }
+});
+
 test('a group administrator can open the fourth column on one date only', async () => {
   socket.groupMetadata = async () => ({ participants: [{ id: sender, admin: 'admin' }] });
 
@@ -448,6 +489,121 @@ test('a group administrator can open the fourth column on one date only', async 
   assert.match(replies.at(-1).text, /4ª COLUNA ABERTA/);
   assert.match(replies.at(-1).text, new RegExp(`Data: 17/09/${futureYear}`));
   assert.doesNotMatch(replies.at(-1).text, /fila|antiguidade/i);
+});
+
+test('/conrograma accepts the common typo and shows the marking schedule', async () => {
+  db.prepare('UPDATE members SET seniority_position=? WHERE id=?').run(1, 1);
+  db.prepare('UPDATE members SET seniority_position=? WHERE id=?').run(2, 18);
+  db.prepare('UPDATE members SET seniority_position=? WHERE id=?').run(3, 19);
+  const saveDeadline = db.prepare(`INSERT INTO marking_deadlines
+    (member_id,deadline_at,updated_by,updated_at) VALUES (?,?,1,?)`);
+  saveDeadline.run(1, `${futureYear}-09-01T08:00:00.000Z`, stamp);
+  saveDeadline.run(18, `${futureYear}-09-01T09:00:00.000Z`, stamp);
+  saveDeadline.run(19, `${futureYear}-09-01T10:00:00.000Z`, stamp);
+
+  await receive('/conrograma', []);
+
+  assert.match(replies.at(-1).text, /CRONOGRAMA DA ESCALA DE/);
+  assert.match(replies.at(-1).text, /Sgt Remetente/);
+  assert.match(replies.at(-1).text, /Sgt Alex/);
+});
+
+test('a started schedule announces the queue and adds a new date heading when deadlines cross midnight', async () => {
+  db.prepare('UPDATE members SET seniority_position=? WHERE id=?').run(1, 1);
+  db.prepare('UPDATE members SET seniority_position=? WHERE id=?').run(2, 18);
+  db.prepare('UPDATE members SET seniority_position=? WHERE id=?').run(3, 19);
+  const saveDeadline = db.prepare(`INSERT INTO marking_deadlines
+    (member_id,deadline_at,updated_by,updated_at) VALUES (?,?,1,?)`);
+  saveDeadline.run(1, `${futureYear}-09-25T08:00:00`, stamp);
+  saveDeadline.run(18, `${futureYear}-09-25T09:00:00`, stamp);
+  saveDeadline.run(19, `${futureYear}-09-26T08:00:00`, stamp);
+
+  const schedule = await buildMarkingSchedule({ competencyId: competency.id, column: 2, started: true });
+
+  assert.match(schedule.text, /ESCALA DE SETEMBRO/);
+  assert.match(schedule.text, /A marcação pode iniciar agora/);
+  assert.match(schedule.text, /25\/09\/\d{4}/);
+  assert.match(schedule.text, /2ª coluna/);
+  assert.match(schedule.text, /1\. Sgt Remetente — até 08h/);
+  assert.match(schedule.text, /2\. Sgt Alex — até 09h/);
+  assert.match(schedule.text, /26\/09\/\d{4}/);
+  assert.match(schedule.text, /3\. Sgt Outro — até 08h/);
+});
+
+test('a future schedule date announces 06:00 as the beginning instead of saying it starts now', async () => {
+  const saveDeadline = db.prepare(`INSERT INTO marking_deadlines
+    (member_id,deadline_at,updated_by,updated_at) VALUES (?,?,1,?)`);
+  saveDeadline.run(1, `${futureYear}-09-25T08:00:00`, stamp);
+  saveDeadline.run(18, `${futureYear}-09-25T09:00:00`, stamp);
+  saveDeadline.run(19, `${futureYear}-09-25T10:00:00`, stamp);
+
+  const schedule = await buildMarkingSchedule({
+    competencyId: competency.id,
+    column: 2,
+    started: true,
+    startsAt: `${futureYear}-09-25T06:00:00`
+  });
+
+  assert.match(schedule.text, new RegExp(`25/09/${futureYear} às 06:00`));
+  assert.doesNotMatch(schedule.text, /pode iniciar agora/i);
+});
+
+test('marking is blocked until the programmed queue start time', async () => {
+  setting.run('bot_marking_round_starts_at', new Date(Date.now() + 86_400_000).toISOString(), stamp);
+
+  await receive('@Escalante dia 20 noite', [bot]);
+
+  assert.deepEqual(assignedIds(), []);
+  assert.match(replies.at(-1).text, /fila de marcação começará/i);
+});
+
+test('a complete pasted schedule reads the month, dates, column, members and deadline hours', () => {
+  const plan = parseMarkingSchedulePlan(`ESCALA DE SETEMBRO
+
+A marcação pode iniciar agora
+
+25/09/${futureYear}
+
+2ª coluna
+
+1. Sgt Remetente — até 08h
+2. Sgt Alex — até 09h30
+
+26/09/${futureYear}
+
+3. Sgt Outro — até 10h`);
+
+  assert.equal(plan.error, null);
+  assert.equal(plan.month, 9);
+  assert.equal(plan.year, futureYear);
+  assert.equal(plan.column, 2);
+  assert.deepEqual(plan.entries.map((item) => ({ number: item.number, name: item.name })), [
+    { number: 1, name: 'Sgt Remetente' },
+    { number: 2, name: 'Sgt Alex' },
+    { number: 3, name: 'Sgt Outro' }
+  ]);
+  assert.equal(new Date(plan.entries[0].deadlineAt).getHours(), 8);
+  assert.equal(new Date(plan.entries[1].deadlineAt).getMinutes(), 30);
+  assert.equal(new Date(plan.entries[2].deadlineAt).getDate(), 26);
+});
+
+test('only a group administrator can import and start a complete pasted schedule', async () => {
+  await receive(`@Escalante
+ESCALA DE SETEMBRO
+A marcação pode iniciar agora
+25/09/${futureYear}
+2ª coluna
+1. Sgt Remetente — até 08h
+2. Sgt Alex — até 09h
+3. Sgt Outro — até 10h`, [bot]);
+
+  assert.match(replies.at(-1).text, /Somente administradores do grupo podem preencher horários e iniciar a fila/i);
+});
+
+test('starting the schedule is recognized and restricted to group administrators', async () => {
+  await receive('@Escalante começar cronograma', [bot]);
+
+  assert.match(replies.at(-1).text, /Somente administradores do grupo podem iniciar ou reiniciar/i);
 });
 
 test('a group administrator can open the fourth column on the whole month except selected days', async () => {
