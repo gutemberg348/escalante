@@ -820,6 +820,45 @@ test('a group administrator can open the fourth column on the whole month except
   ]);
 });
 
+test('a group administrator can open a column only on selected days with slash command', async () => {
+  socket.groupMetadata = async () => ({ participants: [{ id: sender, admin: 'admin' }] });
+
+  await receive('/abrir 4ª coluna somente dias 5, 10 e 20', []);
+
+  assert.deepEqual(db.prepare(`SELECT service_date,current_capacity FROM service_slots
+    WHERE competency_id=? AND service_date IN (?,?,?,?) AND period='DIURNO' ORDER BY service_date`)
+    .all(competency.id, `${futureYear}-09-05`, `${futureYear}-09-06`, `${futureYear}-09-10`, `${futureYear}-09-20`), [
+    { service_date: `${futureYear}-09-05`, current_capacity: 4 },
+    { service_date: `${futureYear}-09-06`, current_capacity: 2 },
+    { service_date: `${futureYear}-09-10`, current_capacity: 4 },
+    { service_date: `${futureYear}-09-20`, current_capacity: 4 }
+  ]);
+});
+
+test('a group administrator can open a column on the whole month with natural variations', async () => {
+  socket.groupMetadata = async () => ({ participants: [{ id: sender, admin: 'admin' }] });
+
+  await receive('@Escalante abrir 4 coluna em todos os dias', [bot]);
+
+  const capacities = db.prepare(`SELECT DISTINCT current_capacity FROM service_slots
+    WHERE competency_id=? ORDER BY current_capacity`).all(competency.id);
+  assert.deepEqual(capacities, [{ current_capacity: 4 }]);
+});
+
+test('a group administrator can use menos as a synonym for exceto', async () => {
+  socket.groupMetadata = async () => ({ participants: [{ id: sender, admin: 'admin' }] });
+
+  await receive('@Escalante abrir quarta coluna menos os dias 5 e 10', [bot]);
+
+  assert.deepEqual(db.prepare(`SELECT service_date,current_capacity FROM service_slots
+    WHERE competency_id=? AND service_date IN (?,?,?) AND period='DIURNO' ORDER BY service_date`)
+    .all(competency.id, `${futureYear}-09-05`, `${futureYear}-09-06`, `${futureYear}-09-10`), [
+    { service_date: `${futureYear}-09-05`, current_capacity: 2 },
+    { service_date: `${futureYear}-09-06`, current_capacity: 4 },
+    { service_date: `${futureYear}-09-10`, current_capacity: 2 }
+  ]);
+});
+
 test('closing an occupied column warns first and only deletes after EXCLUA', async () => {
   socket.groupMetadata = async () => ({ participants: [{ id: sender, admin: 'superadmin' }] });
   const serviceDate = `${futureYear}-09-17`;

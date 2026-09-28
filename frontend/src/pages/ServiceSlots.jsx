@@ -25,6 +25,7 @@ export default function ServiceSlots() {
   const [selectedDates, setSelectedDates] = useState([]);
   const [targetColumn, setTargetColumn] = useState(3);
   const [columnAction, setColumnAction] = useState('OPEN');
+  const [columnConflict, setColumnConflict] = useState(null);
   const [confirmationDate, setConfirmationDate] = useState(null);
   const [downloadError, setDownloadError] = useState('');
   const [isDownloading, setIsDownloading] = useState(false);
@@ -66,12 +67,19 @@ export default function ServiceSlots() {
   }, [pdfColumns]);
 
   const saveColumns = useMutation({
-    mutationFn: (items) => api.put('/service-slots/pdf-columns', { competencyId: Number(competencyId), items }),
-    onSuccess: () => {
+    mutationFn: ({ items, deleteOccupied = false }) => api.put('/service-slots/pdf-columns', { competencyId: Number(competencyId), items, deleteOccupied }),
+    onSuccess: (response) => {
+      setDayColumns(Object.fromEntries(response.data.item.items.map((item) => [item.serviceDate, item.openColumns])));
       queryClient.invalidateQueries({ queryKey: ['pdf-columns', competencyId] });
       queryClient.invalidateQueries({ queryKey: ['slots', competencyId] });
       queryClient.invalidateQueries({ queryKey: ['seniority'] });
+      setColumnConflict(null);
       setSettingsOpen(false);
+    },
+    onError: (error, variables) => {
+      if (error.response?.data?.code === 'COLUMN_POSITIONS_OCCUPIED') {
+        setColumnConflict({ ...error.response.data, items: variables.items });
+      }
     }
   });
   const downloadPdf = async (competency = selectedCompetency) => {
@@ -110,9 +118,10 @@ export default function ServiceSlots() {
     setSelectedDates([]);
     setTargetColumn(3);
     setColumnAction('OPEN');
+    setColumnConflict(null);
     setSettingsOpen(true);
   };
-  const applySettings = () => {
+  const applySettings = (deleteOccupied = false) => {
     const targets = scope === 'MONTH' ? dates : selectedDates;
     const next = { ...dayColumns };
     targets.forEach((date) => {
@@ -126,8 +135,9 @@ export default function ServiceSlots() {
       }
       next[date] = [1, 2, 3, 4].filter((column) => openColumns.has(column));
     });
-    setDayColumns(next);
-    saveColumns.mutate(dates.map((date) => ({ serviceDate: date, openColumns: next[date] || [1, 2] })));
+    const items = dates.map((date) => ({ serviceDate: date, openColumns: next[date] || [1, 2] }));
+    setColumnConflict(null);
+    saveColumns.mutate({ items, deleteOccupied });
   };
   const toggleDate = (date) => setSelectedDates((current) => current.includes(date) ? current.filter((item) => item !== date) : [...current, date]);
   const coverage = (slot) => slot ? `${slot.confirmed_count}/${slot.current_capacity} confirmados` : '—';
@@ -162,13 +172,14 @@ export default function ServiceSlots() {
     {settingsOpen && <div className="modal-backdrop" role="presentation"><section className="edit-modal month-settings-modal" role="dialog" aria-modal="true" aria-label="Configurações das colunas">
       <div className="modal-header"><div><span className="eyebrow">COLUNAS DA ESCALA</span><h2>{selectedCompetency?.name}</h2></div><button className="close-button" onClick={() => setSettingsOpen(false)} aria-label="Fechar">×</button></div>
       <p className="modal-copy">A 1ª e a 2ª posições permanecem abertas. Liberar a 3ª ou a 4ª apenas disponibiliza a coluna; a fila só começa quando o cronograma for iniciado com data e coluna.</p>
-      <div className="column-setting-step"><strong>1. Onde alterar?</strong><div className="settings-choice"><button type="button" className={scope === 'MONTH' ? 'selected' : 'secondary-button'} onClick={() => { setScope('MONTH'); setSelectedDates([]); }}>Mês inteiro</button><button type="button" className={scope === 'DATES' ? 'selected' : 'secondary-button'} onClick={() => { setScope('DATES'); setSelectedDates([]); }}>Dias específicos</button></div></div>
-      <div className="column-setting-step"><strong>2. Qual coluna?</strong><div className="settings-choice"><button type="button" className={targetColumn === 3 ? 'selected' : 'secondary-button'} onClick={() => setTargetColumn(3)}>3ª coluna</button><button type="button" className={targetColumn === 4 ? 'selected' : 'secondary-button'} onClick={() => setTargetColumn(4)}>4ª coluna</button></div></div>
-      <div className="column-setting-step"><strong>3. O que fazer?</strong><div className="settings-choice"><button type="button" className={columnAction === 'OPEN' ? 'selected' : 'secondary-button'} onClick={() => setColumnAction('OPEN')}>Abrir coluna</button><button type="button" className={columnAction === 'CLOSE' ? 'selected close-selection' : 'secondary-button'} onClick={() => setColumnAction('CLOSE')}>Fechar coluna</button></div></div>
-      {scope === 'DATES' && <div className="specific-days"><div className="specific-days-heading"><strong>4. Marque somente os dias desejados</strong><span>{selectedDates.length} selecionado(s)</span></div><div className="date-picker-grid">{dates.map((date) => <label key={date} className={selectedDates.includes(date) ? 'chosen' : ''}><input type="checkbox" checked={selectedDates.includes(date)} onChange={() => toggleDate(date)} /> <span>{dateLabel(date)}</span><small>{dayColumns[date]?.includes(targetColumn) ? 'aberta' : 'fechada'}</small></label>)}</div></div>}
+      <div className="column-setting-step"><strong>1. Onde alterar?</strong><div className="settings-choice"><button type="button" className={scope === 'MONTH' ? 'selected' : 'secondary-button'} onClick={() => { setScope('MONTH'); setSelectedDates([]); setColumnConflict(null); }}>Mês inteiro</button><button type="button" className={scope === 'DATES' ? 'selected' : 'secondary-button'} onClick={() => { setScope('DATES'); setSelectedDates([]); setColumnConflict(null); }}>Dias específicos</button></div></div>
+      <div className="column-setting-step"><strong>2. Qual coluna?</strong><div className="settings-choice"><button type="button" className={targetColumn === 3 ? 'selected' : 'secondary-button'} onClick={() => { setTargetColumn(3); setColumnConflict(null); }}>3ª coluna</button><button type="button" className={targetColumn === 4 ? 'selected' : 'secondary-button'} onClick={() => { setTargetColumn(4); setColumnConflict(null); }}>4ª coluna</button></div></div>
+      <div className="column-setting-step"><strong>3. O que fazer?</strong><div className="settings-choice"><button type="button" className={columnAction === 'OPEN' ? 'selected' : 'secondary-button'} onClick={() => { setColumnAction('OPEN'); setColumnConflict(null); }}>Abrir coluna</button><button type="button" className={columnAction === 'CLOSE' ? 'selected close-selection' : 'secondary-button'} onClick={() => { setColumnAction('CLOSE'); setColumnConflict(null); }}>Fechar coluna</button></div></div>
+      {scope === 'DATES' && <div className="specific-days"><div className="specific-days-heading"><strong>4. Marque somente os dias desejados</strong><div className="specific-days-tools"><span>{selectedDates.length} selecionado(s)</span><button type="button" className="table-button" onClick={() => setSelectedDates(dates)}>Marcar todos</button><button type="button" className="table-button" disabled={!selectedDates.length} onClick={() => setSelectedDates([])}>Desmarcar todos</button></div></div><div className="date-picker-grid">{dates.map((date) => <label key={date} className={selectedDates.includes(date) ? 'chosen' : ''}><input type="checkbox" checked={selectedDates.includes(date)} onChange={() => { setColumnConflict(null); toggleDate(date); }} /> <span>{dateLabel(date)}</span><small>{dayColumns[date]?.includes(targetColumn) ? 'aberta' : 'fechada'}</small></label>)}</div></div>}
       <div className={`column-action-summary ${columnAction === 'CLOSE' ? 'closing' : ''}`}><strong>{columnAction === 'OPEN' ? 'Abrir' : 'Fechar'} a {targetColumn}ª coluna</strong><span>{scope === 'MONTH' ? `em todos os ${dates.length} dias do mês` : selectedDates.length ? `em ${selectedDates.length} dia(s) selecionado(s)` : 'selecione ao menos um dia acima'}</span>{targetColumn === 4 && columnAction === 'OPEN' && <small>Abrir a 4ª também mantém a 3ª aberta.</small>}{targetColumn === 3 && columnAction === 'CLOSE' && <small>Fechar a 3ª também fecha a 4ª nesses dias.</small>}</div>
-      <div className="form-actions"><button type="button" className="secondary-button" onClick={() => setSettingsOpen(false)}>Cancelar</button><button type="button" disabled={saveColumns.isPending || (scope === 'DATES' && !selectedDates.length)} onClick={applySettings}>{saveColumns.isPending ? 'Aplicando…' : `${columnAction === 'OPEN' ? 'Abrir' : 'Fechar'} ${targetColumn}ª coluna`}</button></div>
-      {saveColumns.isError && <p className="error">{saveColumns.error.response?.data?.message || 'Não foi possível atualizar as colunas.'}</p>}
+      {columnConflict && <div className="column-conflict-warning"><strong>A coluna não foi fechada.</strong><p>{columnConflict.message}</p><ul>{columnConflict.occupiedAssignments.slice(0, 8).map((item) => <li key={item.id}>{dateLabel(item.serviceDate)} · {item.period === 'DIURNO' ? 'dia' : 'noite'} · {item.positionNumber}ª: {item.member}</li>)}</ul>{columnConflict.occupiedAssignments.length > 8 && <small>e mais {columnConflict.occupiedAssignments.length - 8} marcação(ões).</small>}<button type="button" className="danger-button" disabled={saveColumns.isPending} onClick={() => saveColumns.mutate({ items: columnConflict.items, deleteOccupied: true })}>Excluir marcações e fechar</button></div>}
+      <div className="form-actions"><button type="button" className="secondary-button" onClick={() => setSettingsOpen(false)}>Cancelar</button><button type="button" disabled={saveColumns.isPending || (scope === 'DATES' && !selectedDates.length)} onClick={() => applySettings(false)}>{saveColumns.isPending ? 'Aplicando…' : `${columnAction === 'OPEN' ? 'Abrir' : 'Fechar'} ${targetColumn}ª coluna`}</button></div>
+      {saveColumns.isError && !columnConflict && <p className="error">{saveColumns.error.response?.data?.message || 'Não foi possível atualizar as colunas.'}</p>}
     </section></div>}
 
     {confirmationDate && <div className="modal-backdrop" role="presentation"><section className="edit-modal confirmations-modal" role="dialog" aria-modal="true" aria-label="Confirmados do dia">

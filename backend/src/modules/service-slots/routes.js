@@ -237,26 +237,43 @@ router.put('/pdf-columns', allow('ADMIN'), async (req, res, next) => {
   try {
     const input = z.object({
       competencyId: z.number().int().positive(),
-      items: z.array(z.object({ serviceDate: z.string().date(), openColumns: z.array(z.number().int().min(1).max(4)) }))
+      items: z.array(z.object({ serviceDate: z.string().date(), openColumns: z.array(z.number().int().min(1).max(4)) })),
+      deleteOccupied: z.boolean().optional().default(false)
     }).parse(req.body);
     const validDates = new Set(db.prepare('SELECT DISTINCT service_date FROM service_slots WHERE competency_id=?').all(input.competencyId).map((row) => row.service_date));
     if (input.items.some((item) => !validDates.has(item.serviceDate))) return res.status(400).json({ message: 'Uma das datas não pertence ao mês selecionado.' });
-    const confirmed = new Map(db.prepare(`SELECT s.service_date,s.period,COUNT(a.id) confirmed_count
-      FROM service_slots s LEFT JOIN assignments a ON a.service_slot_id=s.id AND a.status='CONFIRMED'
-      WHERE s.competency_id=? GROUP BY s.id`).all(input.competencyId)
-      .map((row) => [`${row.service_date}:${row.period}`, Number(row.confirmed_count)]));
     const normalized = input.items.map((item) => {
       const selected = new Set(item.openColumns);
       const fourth = selected.has(4);
       const third = selected.has(3) || fourth;
       const capacity = fourth ? 4 : third ? 3 : 2;
-      for (const period of ['DIURNO', 'NOTURNO']) {
-        if ((confirmed.get(`${item.serviceDate}:${period}`) || 0) > capacity) throw new Error(`Não é possível trancar a coluna de ${item.serviceDate}: já há militares confirmados nela.`);
-      }
       return { serviceDate: item.serviceDate, third, fourth, capacity, openColumns: [1, 2, ...(third ? [3] : []), ...(fourth ? [4] : [])] };
     });
+    const requestedCapacity = new Map(normalized.map((item) => [item.serviceDate, item.capacity]));
+    const occupiedAssignments = db.prepare(`SELECT a.id,a.position_number,m.rank,m.operational_name,s.service_date,s.period
+      FROM assignments a JOIN service_slots s ON s.id=a.service_slot_id JOIN members m ON m.id=a.member_id
+      WHERE s.competency_id=? AND a.status='CONFIRMED' ORDER BY s.service_date,s.period,a.position_number`)
+      .all(input.competencyId)
+      .filter((assignment) => assignment.position_number > (requestedCapacity.get(assignment.service_date) ?? 4));
+    if (occupiedAssignments.length && !input.deleteOccupied) {
+      return res.status(409).json({
+        code: 'COLUMN_POSITIONS_OCCUPIED',
+        message: `Existem ${occupiedAssignments.length} marcação(ões) nas posições que serão fechadas. Confirme a exclusão para fechar a coluna.`,
+        occupiedAssignments: occupiedAssignments.map((assignment) => ({
+          id: assignment.id,
+          serviceDate: assignment.service_date,
+          period: assignment.period,
+          positionNumber: assignment.position_number,
+          member: `${assignment.rank} ${assignment.operational_name}`
+        }))
+      });
+    }
     const stamp = now();
     db.transaction(() => {
+      if (input.deleteOccupied) {
+        const removeAssignment = db.prepare('DELETE FROM assignments WHERE id=?');
+        for (const assignment of occupiedAssignments) removeAssignment.run(assignment.id);
+      }
       const save = db.prepare(`INSERT INTO schedule_pdf_column_releases
         (competency_id,service_date,third_column_open,fourth_column_open,updated_by,updated_at)
         VALUES (?,?,?,?,?,?) ON CONFLICT(competency_id,service_date) DO UPDATE SET
@@ -271,7 +288,8 @@ router.put('/pdf-columns', allow('ADMIN'), async (req, res, next) => {
         updateCapacity.run(item.capacity, stamp, input.competencyId, item.serviceDate);
       }
     })();
-    audit({ userId: req.user.id, action: 'UPDATE_PDF_COLUMNS', entityType: 'SCHEDULE_PDF', entityId: String(input.competencyId), after: normalized, req });
+    audit({ userId: req.user.id, action: 'UPDATE_PDF_COLUMNS', entityType: 'SCHEDULE_PDF', entityId: String(input.competencyId),
+      before: { removedAssignments: input.deleteOccupied ? occupiedAssignments : [] }, after: normalized, req });
     res.json({ item: { competencyId: input.competencyId, items: normalized.map(({ serviceDate, openColumns }) => ({ serviceDate, openColumns })) } });
   } catch (error) { next(error); }
 });

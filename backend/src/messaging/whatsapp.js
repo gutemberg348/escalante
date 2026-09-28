@@ -581,8 +581,8 @@ function parseColumnCommand(value) {
   const selection = normalized
     .replace(actionMatch[0], ' ')
     .replace(columnMatch[0], ' ')
-    .replace(/\b(?:EXCLUA|NO|NA|DO|DA|MES|INTEIRO|TODA|TODO)\b/g, ' ');
-  const exceptMatch = selection.match(/\bEXCETO\b/);
+    .replace(/\b(?:EXCLUA|NO|NA|DO|DA|MES|INTEIRO|TODA|TODO|TODAS|TODOS|TUDO|SO|SOMENTE)\b/g, ' ');
+  const exceptMatch = selection.match(/\b(?:EXCETO|MENOS)\b/);
   const dateSelection = exceptMatch
     ? selection.slice((exceptMatch.index ?? 0) + exceptMatch[0].length)
     : selection;

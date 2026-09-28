@@ -337,21 +337,29 @@ Abrir no mês inteiro:
    @Escalante abrir 3ª coluna
    @Escalante liberar quarta coluna
    @Escalante destrancar coluna 4
+   /abrir 3ª coluna no mês inteiro
+   /abrir 4ª coluna no mês inteiro
 
 Abrir somente em datas específicas:
    @Escalante abrir 3ª coluna dia 17
    @Escalante liberar 4ª coluna hoje
    @Escalante abrir quarta coluna dias 17 e 18
+   /abrir 4ª coluna somente dias 5, 10 e 20
 
 Abrir o mês inteiro, menos algumas datas:
    @Escalante abrir 4ª coluna exceto dia 17
    @Escalante abrir quarta coluna exceto dias 17 e 18
+   @Escalante abrir quarta coluna menos os dias 17 e 18
    @Escalante liberar 3ª coluna exceto dias 5, 10 e 20
 
 Variações aceitas para abrir:
    abrir, abra, abre
    liberar, libere, libera
    destrancar, destranque
+
+Para deixar alguns dias de fora, pode usar "exceto" ou "menos".
+Frases como "abrir 4 coluna", "abrir a quarta coluna" e "abrir 4ª coluna
+em todos os dias" abrem a coluna no mês inteiro.
 
 Variações aceitas para a coluna:
    3, 3ª, terceira
@@ -370,15 +378,19 @@ Somente administradores do grupo podem usar estes comandos.
 Fechar no mês inteiro:
    @Escalante fechar 4ª coluna
    @Escalante trancar terceira coluna
+   /fechar 3ª coluna no mês inteiro
+   /fechar 4ª coluna no mês inteiro
 
 Fechar somente em datas específicas:
    @Escalante fechar 4ª coluna dia 17
    @Escalante trancar coluna 3 hoje
    @Escalante fechar quarta coluna dias 17 e 18
+   /fechar 4ª coluna somente dias 5, 10 e 20
 
 Fechar o mês inteiro, menos algumas datas:
    @Escalante fechar 4ª coluna exceto dia 17
    @Escalante trancar terceira coluna exceto dias 17 e 18
+   @Escalante fechar quarta coluna menos os dias 17 e 18
 
 Variações aceitas para fechar:
    fechar, feche, fecha
@@ -390,6 +402,13 @@ montará a frase de confirmação. Para excluir as marcações e fechar, reenvie
 frase terminando com EXCLUA. Exemplo:
 
    @Escalante fechar 4ª coluna dia 17 EXCLUA
+
+Para o mês inteiro, depois de conferir o aviso:
+
+   @Escalante fechar 4ª coluna no mês inteiro EXCLUA
+
+Os comandos alteram o mês que está ativo no WhatsApp. Para escolher outro mês,
+use primeiro /escala MM/AAAA.
 
 Ao fechar a 3ª coluna, a 4ª também será fechada nos mesmos dias.
 EXCLUA remove as marcações que ocupam as posições fechadas; use somente depois
