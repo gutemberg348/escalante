@@ -15,6 +15,7 @@ const { db, now } = await import('../src/database/index.js');
 const { runMigrations } = await import('../src/database/migrations.js');
 const { ensureCompetencySchedule } = await import('../src/scheduling/monthly.js');
 const { buildMarkingSchedule, handleIncomingMessages, parseMarkingSchedulePlan, parseMemberStatusCommand, parseNaturalChoices } = await import('../src/messaging/whatsapp.js');
+const { assignmentCellsBySlot } = await import('../src/messaging/schedule-pdf.js');
 runMigrations();
 
 const group = '120000000000001@g.us';
@@ -491,6 +492,12 @@ test('vacation removes ordinary duties without moving or reclassifying remaining
   assert.deepEqual(db.prepare(`SELECT member_id,position_number,service_type FROM assignments a JOIN service_slots s ON s.id=a.service_slot_id
     WHERE s.competency_id=? AND s.service_date=? AND s.period='DIURNO' ORDER BY position_number`)
     .all(competency.id, `${futureYear}-09-20`), [{ member_id: 19, position_number: 2, service_type: 'EXTRAORDINARY' }]);
+  const slot = db.prepare(`SELECT id FROM service_slots WHERE competency_id=? AND service_date=? AND period='DIURNO'`)
+    .get(competency.id, `${futureYear}-09-20`);
+  const pdfCells = assignmentCellsBySlot(competency.id).get(slot.id);
+  assert.equal(pdfCells.names[0], undefined);
+  assert.equal(pdfCells.names[1], 'Sgt Outro');
+  assert.equal(pdfCells.types[1], 'EXTRAORDINARY');
   assert.ok(replies.some((reply) => /SITUAÇÃO ATUALIZADA/i.test(reply.text ?? '')));
   assert.ok(replies.every((reply) => !/Ordinários removidos|Extras mantidos|Extras removidos/i.test(reply.text ?? '')));
   assert.ok(replies.some((reply) => reply.document && reply.mimetype === 'application/pdf'));

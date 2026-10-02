@@ -28,6 +28,22 @@ function scheduleStatus(competency, slots) {
   return homologated || competency.status === 'HOMOLOGATED' ? 'HOMOLOGADA' : 'RASCUNHO — NÃO HOMOLOGADA';
 }
 
+export function assignmentCellsBySlot(competencyId) {
+  const cellsBySlot = new Map();
+  for (const row of db.prepare(`SELECT a.service_slot_id,a.position_number,a.service_type,a.display_prefix,
+      m.rank,m.operational_name
+    FROM assignments a JOIN service_slots s ON s.id=a.service_slot_id JOIN members m ON m.id=a.member_id
+    WHERE s.competency_id=? AND a.status='CONFIRMED'
+    ORDER BY a.service_slot_id,a.position_number`).all(competencyId)) {
+    const cells = cellsBySlot.get(row.service_slot_id) ?? { names: [], types: [] };
+    const suffix = String(row.display_prefix ?? '').trim();
+    cells.names[row.position_number - 1] = `${row.rank} ${row.operational_name}${suffix ? ` (${suffix})` : ''}`;
+    cells.types[row.position_number - 1] = row.service_type;
+    cellsBySlot.set(row.service_slot_id, cells);
+  }
+  return cellsBySlot;
+}
+
 export function buildSchedulePdf({ competency, slots }) {
   return new Promise((resolve, reject) => {
     const document = new PDFDocument({
@@ -45,15 +61,7 @@ export function buildSchedulePdf({ competency, slots }) {
     const columnTitles = ['Dia', 'Sem.', 'Período', '1ª posição', '2ª posição', '3ª coluna', '4ª coluna'];
     const releases = new Map(db.prepare(`SELECT service_date,third_column_open,fourth_column_open
       FROM schedule_pdf_column_releases WHERE competency_id=?`).all(competency.id).map((row) => [row.service_date, row]));
-    const memberTypesBySlot = new Map();
-    for (const row of db.prepare(`SELECT a.service_slot_id,a.position_number,a.service_type
-      FROM assignments a JOIN service_slots s ON s.id=a.service_slot_id
-      WHERE s.competency_id=? AND a.status='CONFIRMED'
-      ORDER BY a.service_slot_id,a.position_number`).all(competency.id)) {
-      const types = memberTypesBySlot.get(row.service_slot_id) ?? [];
-      types[row.position_number - 1] = row.service_type;
-      memberTypesBySlot.set(row.service_slot_id, types);
-    }
+    const assignmentCells = assignmentCellsBySlot(competency.id);
     const updatedAt = dayjs().format('DD/MM/YYYY [às] HH:mm');
 
     document.rect(tableX, 20, tableWidth, 30).fill(colors.navy);
@@ -100,8 +108,7 @@ export function buildSchedulePdf({ competency, slots }) {
 
       for (let periodIndex = 0; periodIndex < day.slots.length; periodIndex += 1) {
         const slot = day.slots[periodIndex];
-        const names = slot.members ?? [];
-        const memberTypes = memberTypesBySlot.get(slot.id) ?? [];
+        const { names = [], types: memberTypes = [] } = assignmentCells.get(slot.id) ?? {};
         const values = [
           slot.period === 'DIURNO' ? '07h00 às 19h00' : '19h00 às 07h00',
           names[0] ?? 'VAGA', names[1] ?? 'VAGA',
