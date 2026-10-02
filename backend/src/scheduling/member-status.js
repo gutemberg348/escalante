@@ -1,4 +1,4 @@
-import { audit, db, now } from '../database/index.js';
+import { audit, db } from '../database/index.js';
 
 export function vacationImpact({ memberId, competencyId }) {
   const assignments = db.prepare(`SELECT a.id,a.service_slot_id,a.position_number,a.service_type,s.service_date,s.period
@@ -16,18 +16,9 @@ export function applyVacationToCompetency({ memberId, competencyId, userId = nul
   const impact = vacationImpact({ memberId, competencyId });
   const assignmentsToRemove = impact.assignments.filter((assignment) => assignment.service_type === 'ORDINARY');
   const affectedSlotIds = [...new Set(assignmentsToRemove.map((assignment) => assignment.service_slot_id))];
-  const stamp = now();
   db.transaction(() => {
     const removeAssignment = db.prepare('DELETE FROM assignments WHERE id=?');
     for (const assignment of assignmentsToRemove) removeAssignment.run(assignment.id);
-    const remainingAssignments = db.prepare(`SELECT id FROM assignments
-      WHERE service_slot_id=? AND status='CONFIRMED' ORDER BY position_number,id`);
-    const moveAssignment = db.prepare('UPDATE assignments SET position_number=?,updated_at=? WHERE id=?');
-    for (const slotId of affectedSlotIds) {
-      const remaining = remainingAssignments.all(slotId);
-      for (const assignment of remaining) moveAssignment.run(-assignment.id, stamp, assignment.id);
-      for (const [index, assignment] of remaining.entries()) moveAssignment.run(index + 1, stamp, assignment.id);
-    }
   })();
   const result = {
     confirmationRequired: false,

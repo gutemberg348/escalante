@@ -289,16 +289,17 @@ Licença, afastado e desativado impedem novas marcações. Ativo libera novament
 o militar, sem alterar a autorização.
 
 Ao colocar um militar de férias, o bot atua na escala atualmente selecionada:
-remove os serviços ordinários dele, reorganiza as posições sem deixar espaços
-vazios e envia o PDF atualizado. Exemplo: se ele ocupava a 1ª posição, quem
-estava na 2ª passa para a 1ª.
+remove somente os serviços ordinários dele e envia o PDF atualizado. A posição
+retirada fica como VAGA; os demais militares não mudam de posição nem de tipo de
+serviço.
 
 Os serviços extras já marcados são sempre mantidos. Não existe confirmação para
-retirar extras ao colocar de férias. O bot atualiza a situação, reorganiza apenas
-as posições ordinárias e envia o PDF atualizado.
+retirar extras ao colocar de férias. O bot atualiza a situação, mantém os extras
+exatamente nas posições em que estavam e envia o PDF atualizado.
 
 Essa mesma regra é aplicada ao trocar a situação pela página Efetivo: somente os
-ordinários são removidos e os extras permanecem. Ao voltar ao status Ativo, a
+ordinários são removidos, as vagas ficam abertas e os extras permanecem na mesma
+posição. Ao voltar ao status Ativo, a
 escala selecionada é regerada para recalcular os serviços ordinários; os serviços
 extras continuam preservados.
 

@@ -114,7 +114,8 @@ export function buildSchedulePdf({ competency, slots }) {
           const tableColumn = column + 2;
           const closed = (tableColumn === 5 && !openThird) || (tableColumn === 6 && !openFourth);
           const vacancy = tableColumn >= 3 && values[column] === 'VAGA';
-          const extraAssignment = column >= 3 || (column === 2 && memberTypes[1] === 'EXTRAORDINARY');
+          const assignmentType = column > 0 ? memberTypes[column - 1] : null;
+          const extraAssignment = assignmentType === 'EXTRAORDINARY';
           drawCell(document, {
             x, y: periodY, width: columnWidths[tableColumn], height: rowHeight,
             fill: closed ? colors.closedYellow : vacancy ? colors.vacancyBackground : dayFill,

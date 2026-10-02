@@ -480,7 +480,7 @@ test('a group administrator can set vacation, leave, away, active and inactive w
   }
 });
 
-test('vacation removes ordinary duties, compacts positions and sends the updated PDF', async () => {
+test('vacation removes ordinary duties without moving or reclassifying remaining extras and sends the updated PDF', async () => {
   socket.groupMetadata = async () => ({ participants: [{ id: sender, admin: 'admin' }] });
   addConfirmedAssignment({ memberId: 18, day: 20, period: 'DIURNO', serviceType: 'ORDINARY' });
   addConfirmedAssignment({ memberId: 19, day: 20, period: 'DIURNO', serviceType: 'EXTRAORDINARY' });
@@ -488,9 +488,9 @@ test('vacation removes ordinary duties, compacts positions and sends the updated
   await receive('@Escalante férias @Alex', [bot, alex]);
 
   assert.equal(db.prepare('SELECT operational_status FROM members WHERE id=18').get().operational_status, 'VACATION');
-  assert.deepEqual(db.prepare(`SELECT member_id,position_number FROM assignments a JOIN service_slots s ON s.id=a.service_slot_id
+  assert.deepEqual(db.prepare(`SELECT member_id,position_number,service_type FROM assignments a JOIN service_slots s ON s.id=a.service_slot_id
     WHERE s.competency_id=? AND s.service_date=? AND s.period='DIURNO' ORDER BY position_number`)
-    .all(competency.id, `${futureYear}-09-20`), [{ member_id: 19, position_number: 1 }]);
+    .all(competency.id, `${futureYear}-09-20`), [{ member_id: 19, position_number: 2, service_type: 'EXTRAORDINARY' }]);
   assert.ok(replies.some((reply) => /SITUAÇÃO ATUALIZADA/i.test(reply.text ?? '')));
   assert.ok(replies.every((reply) => !/Ordinários removidos|Extras mantidos|Extras removidos/i.test(reply.text ?? '')));
   assert.ok(replies.some((reply) => reply.document && reply.mimetype === 'application/pdf'));
