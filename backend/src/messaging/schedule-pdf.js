@@ -4,9 +4,9 @@ import { db } from '../database/index.js';
 
 const weekdays = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
 const colors = {
-  navy: '#173750', teal: '#245e79', paleYellow: '#fff4b8', closedYellow: '#ffe600',
+  navy: '#173750', teal: '#245e79', paleYellow: '#fff4b8', closedBackground: '#fbe8e9', closedText: '#8c2633',
   closedHeader: '#dac500', grid: '#6993a6', lightGrid: '#afc4ce', vacancy: '#d51f32',
-  vacancyBackground: '#fbe8e9', vacancyText: '#168257', special: '#d3202d', text: '#23343d', muted: '#657680',
+  vacancyBackground: '#eaf7ee', vacancyText: '#14532d', special: '#d3202d', text: '#23343d', muted: '#657680',
 };
 
 function fitText(document, text, x, y, width, height, options = {}) {
@@ -125,12 +125,12 @@ export function buildSchedulePdf({ competency, slots }) {
           const extraAssignment = assignmentType === 'EXTRAORDINARY';
           drawCell(document, {
             x, y: periodY, width: columnWidths[tableColumn], height: rowHeight,
-            fill: closed ? colors.closedYellow : vacancy ? colors.vacancyBackground : dayFill,
+            fill: closed ? colors.closedBackground : vacancy ? colors.vacancyBackground : dayFill,
             border: colors.lightGrid, lineWidth: 0.32
           });
           fitText(document, values[column], x, periodY, columnWidths[tableColumn], rowHeight, {
             bold: column === 0 && special || vacancy || closed, fontSize: 4.9,
-            color: closed ? '#5a4e00' : vacancy ? colors.vacancyText : extraAssignment || column === 0 && special ? colors.special : colors.text,
+            color: closed ? colors.closedText : vacancy ? colors.vacancyText : extraAssignment || column === 0 && special ? colors.special : colors.text,
             align: column === 0 || vacancy || closed ? 'center' : 'left'
           });
           x += columnWidths[tableColumn];
