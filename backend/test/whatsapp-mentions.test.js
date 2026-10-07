@@ -400,6 +400,64 @@ test('permutar swaps two extra assignments and reports both movements', async ()
   assert.match(replies.at(-1).text, /Sgt Outro/);
 });
 
+for (const selfReference of ['por mim', 'por eu', 'por Sgt Remetente', '(Sgt Remetente)']) {
+  test(`replacing an extra member accepts the sender as second participant: ${selfReference}`, async () => {
+    addConfirmedAssignment({ memberId: 18, day: 20, period: 'NOTURNO', serviceType: 'EXTRAORDINARY' });
+    const before = db.prepare('SELECT id,position_number,service_type FROM assignments').get();
+
+    await receive(`@Escalante troque @Alex dia 20 noite ${selfReference}`, [bot, alex]);
+
+    assert.deepEqual(db.prepare('SELECT id,position_number,service_type,member_id FROM assignments').get(), {
+      ...before, member_id: 1
+    });
+    assert.match(replies.at(-1).text, /TROCA REALIZADA/);
+  });
+}
+
+for (const selfReference of ['comigo', 'com mim', 'e eu', 'com Sgt Remetente', '(Sgt Remetente)']) {
+  test(`permuting extra services accepts the sender without self mention: ${selfReference}`, async () => {
+    addConfirmedAssignment({ memberId: 18, day: 20, period: 'NOTURNO', serviceType: 'EXTRAORDINARY' });
+    addConfirmedAssignment({ memberId: 1, day: 21, period: 'DIURNO', serviceType: 'EXTRAORDINARY' });
+
+    await receive(`@Escalante permute @Alex dia 20 noite ${selfReference} dia 21 dia`, [bot, alex]);
+
+    assert.deepEqual(db.prepare(`SELECT a.member_id,a.service_type,s.service_date,s.period FROM assignments a
+      JOIN service_slots s ON s.id=a.service_slot_id ORDER BY a.member_id`).all(), [
+      { member_id: 1, service_type: 'EXTRAORDINARY', service_date: `${futureYear}-09-20`, period: 'NOTURNO' },
+      { member_id: 18, service_type: 'EXTRAORDINARY', service_date: `${futureYear}-09-21`, period: 'DIURNO' }
+    ]);
+    assert.match(replies.at(-1).text, /PERMUTA REALIZADA/);
+  });
+}
+
+for (const text of [
+  '@Escalante permute @Alex dia 20 noite comigo',
+  '@Escalante permute @Alex dia 20 comigo dia 21 dia',
+  '@Escalante permute @Alex dia 20 noite para dia 21 dia',
+  '@Escalante troque @Alex dia 20 noite por Sgt Outro'
+]) {
+  test(`an incomplete or ambiguous exchange with one mention changes nothing: ${text}`, async () => {
+    addConfirmedAssignment({ memberId: 18, day: 20, period: 'NOTURNO', serviceType: 'EXTRAORDINARY' });
+    addConfirmedAssignment({ memberId: 1, day: 21, period: 'DIURNO', serviceType: 'EXTRAORDINARY' });
+    const before = db.prepare('SELECT * FROM assignments ORDER BY id').all();
+
+    await receive(text, [bot, alex]);
+
+    assert.deepEqual(db.prepare('SELECT * FROM assignments ORDER BY id').all(), before);
+    assert.doesNotMatch(replies.at(-1).text, /REALIZAD[AO]/);
+  });
+}
+
+test('replacing another member with the sender still protects ordinary services', async () => {
+  addConfirmedAssignment({ memberId: 18, day: 20, period: 'NOTURNO', serviceType: 'ORDINARY' });
+  const before = db.prepare('SELECT * FROM assignments').all();
+
+  await receive('@Escalante troque @Alex dia 20 noite por mim', [bot, alex]);
+
+  assert.deepEqual(db.prepare('SELECT * FROM assignments').all(), before);
+  assert.match(replies.at(-1).text, /ordinário/i);
+});
+
 test('remanejar moves one extra assignment and keeps its parenthetical label', async () => {
   await receive('@Escalante marque @Alex no dia 20 noite', [bot, alex]);
   db.prepare("UPDATE assignments SET display_prefix='licença'").run();

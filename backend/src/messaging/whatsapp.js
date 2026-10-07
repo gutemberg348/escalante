@@ -1898,7 +1898,24 @@ async function changeExtraAssignment(socket, message, body, directText, targets,
   if (!activeCompetency()) return 'Não há competência ativa para realizar a alteração.';
   const normalized = normalizeMentionLabel(directText);
   const isRemaneuver = remaneuverPattern.test(normalized);
-  if (targets.length === 1) {
+  let segments = null;
+  if (targets.length === 1 && !isRemaneuver) {
+    // O remetente não consegue selecionar o próprio contato no WhatsApp.
+    // Aceite uma referência explícita a ele como segundo participante.
+    const senderName = normalizeMentionLabel(`${requestedBy.rank} ${requestedBy.operational_name}`)
+      .replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const selfPattern = new RegExp(`\\b(?:COMIGO|MIM|EU|${senderName})\\b`, 'g');
+    const selfMatches = [...normalized.matchAll(selfPattern)];
+    if (selfMatches.length !== 1) {
+      return 'Marque o outro militar e escreva *por mim* na troca ou *comigo* na permuta. Exemplo: *@Escalante permute @militar dia 17 noite comigo dia 20 dia*. Nenhuma alteração foi feita.';
+    }
+    const self = selfMatches[0];
+    segments = [
+      { member: targets[0].member, text: normalized.slice(0, self.index).replace(/[()]\s*$/g, '') },
+      { member: requestedBy, text: normalized.slice(self.index + self[0].length).replace(/^\s*[()]/g, '') }
+    ];
+  }
+  if (targets.length === 1 && isRemaneuver) {
     const parts = normalized.split(/\bPARA\b/);
     if (parts.length !== 2) {
       return 'Para remanejar, use: *@Escalante remaneje @militar do dia 17 noite para dia 20 dia*.';
@@ -1909,12 +1926,12 @@ async function changeExtraAssignment(socket, message, body, directText, targets,
     if (destination.error) return destination.error;
     return moveExtraAssignment(requestedBy, targets[0].member, source.choice, destination.choice);
   }
-  if (targets.length !== 2 || targets.some((target) => !target.member || !target.jid)) {
+  if (!segments && (targets.length !== 2 || targets.some((target) => !target.member || !target.jid))) {
     return isRemaneuver
       ? 'Marque um militar e informe a origem e o destino do remanejamento.'
       : 'Marque os dois militares da troca. Nenhuma alteração foi feita.';
   }
-  const segments = multiTargetSegments(socket, message, body, targets);
+  segments ??= multiTargetSegments(socket, message, body, targets);
   if (!segments) return 'Não consegui separar os dois militares e seus horários. Nenhuma alteração foi feita.';
   const first = parseSingleChangeChoice(segments[0].text);
   if (first.error) return first.error;

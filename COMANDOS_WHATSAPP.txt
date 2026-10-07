@@ -225,6 +225,19 @@ Trocar um militar por outro no mesmo horário:
 Permutar dois militares entre horários:
    @Escalante permute @Militar1 dia 17 noite com @Militar2 dia 20 dia
 
+Quando você for o segundo militar, não precisa marcar seu próprio contato:
+   @Escalante troque @Militar dia 17 noite por mim
+   @Escalante permute @Militar dia 17 noite comigo dia 20 dia
+   @Escalante permute @Militar dia 17 noite e eu dia 20 dia
+
+Também pode escrever seu próprio posto e nome cadastrado:
+   @Escalante troque @Militar dia 17 noite por Sgt Jansen
+   @Escalante permute @Militar dia 17 noite com Sgt Jansen dia 20 dia
+
+"Mim", "eu" e "comigo" identificam quem enviou a mensagem. Na permuta,
+informe o dia e o turno dos dois serviços. Na troca, o outro militar é retirado
+daquele serviço extra e você assume a mesma posição.
+
 Remanejar o mesmo militar para outro horário:
    @Escalante remaneje @Militar dia 17 noite para dia 20 dia
 
