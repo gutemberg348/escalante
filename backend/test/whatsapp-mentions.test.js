@@ -270,6 +270,68 @@ test('/justificar never labels an extraordinary assignment', async () => {
   assert.match(replies[0].text, /nenhuma escala ordinária encontrada/i);
 });
 
+for (const [command, label, heading] of [
+  ['permuta', 'Sgt Pedro Neto', 'PERMUTA REGISTRADA'],
+  ['atestado', 'ATESTADO', 'ATESTADO REGISTRADO'],
+  ['dispensado', 'DISPENSADO', 'DISPENSA REGISTRADA']
+]) {
+  test(`${command} annotates existing services without changing member, position, type or hours`, async () => {
+    addConfirmedAssignment({ memberId: 19, day: 28, period: 'DIURNO', serviceType: 'EXTRAORDINARY' });
+    addConfirmedAssignment({ memberId: 18, day: 28, period: 'DIURNO', serviceType: 'ORDINARY' });
+    addConfirmedAssignment({ memberId: 18, day: 28, period: 'NOTURNO', serviceType: 'EXTRAORDINARY' });
+    const before = db.prepare('SELECT * FROM assignments ORDER BY id').all();
+
+    await receive(`@Escalante ${command} @Alex dia 28${command === 'permuta' ? ` (${label})` : ''}`, [bot, alex]);
+
+    const after = db.prepare('SELECT * FROM assignments ORDER BY id').all();
+    assert.deepEqual(after.map(({ display_prefix, updated_at, ...rest }) => rest),
+      before.map(({ display_prefix, updated_at, ...rest }) => rest));
+    assert.deepEqual(after.map(row => row.display_prefix), [null, label, label]);
+    const daySlot = db.prepare(`SELECT id FROM service_slots WHERE competency_id=? AND service_date=? AND period='DIURNO'`)
+      .get(competency.id, `${futureYear}-09-28`);
+    assert.equal(assignmentCellsBySlot(competency.id).get(daySlot.id).names[1], `Sgt Alex (${label})`);
+    assert.equal(replies.at(-1).text, `*${heading}*\nData: 28/09/${futureYear}\nMilitar: Sgt Alex (${label})`);
+  });
+
+  test(`${command} does not create an assignment when no service exists`, async () => {
+    await receive(`/ ${command} @Alex dia 28${command === 'permuta' ? ` (${label})` : ''}`, [alex]);
+
+    assert.deepEqual(assignedIds(), []);
+    assert.match(replies.at(-1).text, /NÃO REGISTRAD[AO]/);
+    assert.match(replies.at(-1).text, /Nenhum serviço encontrado/);
+  });
+}
+
+test('a permuta note with a shift changes only that service and leaves other duties intact', async () => {
+  addConfirmedAssignment({ day: 28, period: 'DIURNO' });
+  addConfirmedAssignment({ day: 28, period: 'NOTURNO' });
+
+  await receive('@Escalante permuta @Alex dia 28 noite (Sgt Pedro Neto)', [bot, alex]);
+
+  assert.deepEqual(db.prepare(`SELECT s.period,a.display_prefix FROM assignments a
+    JOIN service_slots s ON s.id=a.service_slot_id ORDER BY s.period`).all(), [
+    { period: 'DIURNO', display_prefix: null },
+    { period: 'NOTURNO', display_prefix: 'Sgt Pedro Neto' }
+  ]);
+});
+
+test('permuta with two mentioned contacts no longer swaps their services', async () => {
+  addConfirmedAssignment({ memberId: 18, day: 28, period: 'DIURNO', serviceType: 'EXTRAORDINARY' });
+  addConfirmedAssignment({ memberId: 19, day: 29, period: 'DIURNO', serviceType: 'EXTRAORDINARY' });
+  const before = db.prepare('SELECT * FROM assignments ORDER BY id').all();
+
+  await receive('@Escalante permuta @Alex dia 28 dia com @Outro dia 29 dia', [bot, alex, other]);
+
+  assert.deepEqual(db.prepare('SELECT * FROM assignments ORDER BY id').all(), before);
+});
+
+test('a permuta annotation cannot silently turn into a new extra marking', async () => {
+  await receive('@Escalante permuta @Alex dia 28', [bot, alex]);
+
+  assert.deepEqual(assignedIds(), []);
+  assert.match(replies.at(-1).text, /entre parênteses/);
+});
+
 test('a label in a quoted request is applied to the quoted member', async () => {
   addConfirmedAssignment({ period: 'NOTURNO' });
   await receive('@Escalante', [bot], {
@@ -385,17 +447,17 @@ test('trocar replaces one extra member and reports the result', async () => {
   assert.match(replies.at(-1).text, /Agora: Sgt Outro/);
 });
 
-test('permutar swaps two extra assignments and reports both movements', async () => {
+test('trocar swaps two extra assignments and reports both movements', async () => {
   await receive('@Escalante marque @Alex no dia 20 noite', [bot, alex]);
   await receive('@Escalante marque @Outro no dia 21 dia', [bot, other]);
-  await receive('@Escalante permute @Alex dia 20 noite com @Outro dia 21 dia', [bot, alex, other]);
+  await receive('@Escalante troque @Alex dia 20 noite com @Outro dia 21 dia', [bot, alex, other]);
 
   assert.deepEqual(db.prepare(`SELECT a.member_id,s.service_date,s.period FROM assignments a
     JOIN service_slots s ON s.id=a.service_slot_id ORDER BY a.member_id`).all(), [
     { member_id: 18, service_date: `${futureYear}-09-21`, period: 'DIURNO' },
     { member_id: 19, service_date: `${futureYear}-09-20`, period: 'NOTURNO' }
   ]);
-  assert.match(replies.at(-1).text, /PERMUTA REALIZADA/);
+  assert.match(replies.at(-1).text, /TROCA REALIZADA/);
   assert.match(replies.at(-1).text, /Sgt Alex/);
   assert.match(replies.at(-1).text, /Sgt Outro/);
 });
@@ -415,18 +477,18 @@ for (const selfReference of ['por mim', 'por eu', 'por Sgt Remetente', '(Sgt Rem
 }
 
 for (const selfReference of ['comigo', 'com mim', 'e eu', 'com Sgt Remetente', '(Sgt Remetente)']) {
-  test(`permuting extra services accepts the sender without self mention: ${selfReference}`, async () => {
+  test(`swapping extra services accepts the sender without self mention: ${selfReference}`, async () => {
     addConfirmedAssignment({ memberId: 18, day: 20, period: 'NOTURNO', serviceType: 'EXTRAORDINARY' });
     addConfirmedAssignment({ memberId: 1, day: 21, period: 'DIURNO', serviceType: 'EXTRAORDINARY' });
 
-    await receive(`@Escalante permute @Alex dia 20 noite ${selfReference} dia 21 dia`, [bot, alex]);
+    await receive(`@Escalante troque @Alex dia 20 noite ${selfReference} dia 21 dia`, [bot, alex]);
 
     assert.deepEqual(db.prepare(`SELECT a.member_id,a.service_type,s.service_date,s.period FROM assignments a
       JOIN service_slots s ON s.id=a.service_slot_id ORDER BY a.member_id`).all(), [
       { member_id: 1, service_type: 'EXTRAORDINARY', service_date: `${futureYear}-09-20`, period: 'NOTURNO' },
       { member_id: 18, service_type: 'EXTRAORDINARY', service_date: `${futureYear}-09-21`, period: 'DIURNO' }
     ]);
-    assert.match(replies.at(-1).text, /PERMUTA REALIZADA/);
+    assert.match(replies.at(-1).text, /TROCA REALIZADA/);
   });
 }
 

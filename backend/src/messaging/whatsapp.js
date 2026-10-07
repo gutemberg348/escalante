@@ -11,7 +11,7 @@ import { regenerateOrdinaryAssignments } from '../scheduling/monthly.js';
 export { parseNaturalChoices } from './marking-choices.js';
 
 const authDirectory = path.resolve(path.dirname(env.DATABASE_PATH), 'whatsapp-auth');
-const commandHandlerVersion = 'mentions-v10-member-status';
+const commandHandlerVersion = 'mentions-v11-service-annotations';
 const connection = {
   socket: null, saveCreds: null, status: 'DISCONNECTED', qrDataUrl: null, qrIssued: false,
   phoneNumber: null, error: null, reconnectTimer: null, reconnectAttempts: 0,
@@ -445,7 +445,7 @@ function removeDelegatedRemovalAction(body) {
   if (!match) return body;
   return `${body.slice(0, match.index)} ${body.slice(match.index + match[0].length)}`;
 }
-const assignmentChangePattern = /\b(?:TROCA|TROCAR|TROQUE|SUBSTITUI|SUBSTITUIR|SUBSTITUA|PERMUTA|PERMUTAR|PERMUTE|REMANEJA|REMANEJAR|REMANEJE)\b/;
+const assignmentChangePattern = /\b(?:TROCA|TROCAR|TROQUE|SUBSTITUI|SUBSTITUIR|SUBSTITUA|REMANEJA|REMANEJAR|REMANEJE)\b/;
 const remaneuverPattern = /\b(?:REMANEJA|REMANEJAR|REMANEJE)\b/;
 const isAssignmentChangeText = (body) => assignmentChangePattern.test(normalizeMentionLabel(body));
 
@@ -1022,9 +1022,17 @@ Quando informar apenas o dia, todos os extras desse militar no dia serão retira
 
 Para ajustar somente serviços extras:
    *Trocar militar:* @Escalante troque @militar1 dia 17 noite por @militar2
-   *Permutar horários:* @Escalante permute @militar1 dia 17 noite com @militar2 dia 20 dia
+   *Trocar horários:* @Escalante troque @militar1 dia 17 noite com @militar2 dia 20 dia
+   *Trocar comigo:* @Escalante troque @militar dia 17 noite comigo dia 20 dia
    *Remanejar:* @Escalante remaneje @militar1 do dia 17 noite para dia 20 dia
 Cada lado da troca deve informar somente um turno. O bot mostra o antes e o depois.
+
+Para registrar uma observação em um serviço existente:
+   *@Escalante permuta @militar dia 28 (Sgt Pedro Neto)*
+   *@Escalante atestado @militar dia 28*
+   *@Escalante dispensado @militar dia 28*
+O nome permanece na mesma posição, com a observação depois dele: *Sgt Jansen (Sgt Pedro Neto)*.
+Sem turno, registra nos serviços existentes de dia e noite. Não cria marcações nem altera as horas.
 
 Para justificar uma escala ordinária que já existe:
    *@Escalante @militar hoje dia (afastado)*
@@ -1247,6 +1255,25 @@ async function executeCommand(member, rawBody, { explicitSlash = false, targetMe
     if (!groupAdministrator) return 'Somente administradores do grupo podem alterar a situação de um militar.';
     if (!targetMember || !requiresTarget) return 'Marque um militar. Exemplo: *@Escalante coloque @militar de férias*.';
     return changeMemberOperationalStatus(targetMember, memberStatusRequest.status, member, groupJid);
+  }
+  const isPermutaNote = ['PERMUTA', 'PERMUTAR', 'PERMUTE'].includes(command);
+  const isCertificateNote = command === 'ATESTADO';
+  const isDismissalNote = ['DISPENSA', 'DISPENSAR', 'DISPENSE', 'DISPENSADO', 'DISPENSADA'].includes(command);
+  if (isPermutaNote || isCertificateNote || isDismissalNote) {
+    const annotatedMember = targetMember ?? (!requiresTarget ? member : null);
+    if (!annotatedMember) return 'Marque o militar cujo serviço receberá a observação. Nenhuma alteração foi feita.';
+    if (isPermutaNote && !decoratedRequest.displayPrefix) {
+      return 'Para registrar permuta, escreva o outro militar entre parênteses: *@Escalante permuta @militar dia 28 (Sgt Pedro Neto)*. Para trocar os serviços, use *troque*.';
+    }
+    const parsed = parseSelection(decoratedRequest.text.replace(/^\s*\S+/, ' '));
+    if (parsed.error) return parsed.error;
+    if (!parsed.choices.length) return 'Informe o dia e, se desejar, o turno do serviço existente. Nenhuma alteração foi feita.';
+    const label = isPermutaNote ? decoratedRequest.displayPrefix : isCertificateNote ? 'ATESTADO' : 'DISPENSADO';
+    return justifyOrdinaryAssignments(annotatedMember, parsed.choices, label, member, {
+      ordinaryOnly: false,
+      registeredHeading: isPermutaNote ? 'PERMUTA REGISTRADA' : isCertificateNote ? 'ATESTADO REGISTRADO' : 'DISPENSA REGISTRADA',
+      notRegisteredHeading: isPermutaNote ? 'PERMUTA NÃO REGISTRADA' : isCertificateNote ? 'ATESTADO NÃO REGISTRADO' : 'DISPENSA NÃO REGISTRADA'
+    });
   }
   if (['JUSTIFICAR', 'JUSTIFICA', 'JUSTIFIQUE'].includes(command)) {
     const justifiedMember = targetMember ?? (!requiresTarget ? member : null);
@@ -1712,7 +1739,9 @@ async function vacanciesWithPdf(member) {
   };
 }
 
-function justifyOrdinaryAssignments(targetMember, choices, displayPrefix, requestedBy) {
+function justifyOrdinaryAssignments(targetMember, choices, displayPrefix, requestedBy, {
+  ordinaryOnly = true, registeredHeading = 'JUSTIFICATIVA REGISTRADA', notRegisteredHeading = 'JUSTIFICATIVA NÃO REGISTRADA'
+} = {}) {
   const competency = activeCompetency();
   if (!competency) return 'Não há competência ativa para registrar a justificativa.';
   const rows = slotRows(competency.id);
@@ -1725,11 +1754,12 @@ function justifyOrdinaryAssignments(targetMember, choices, displayPrefix, reques
         const slot = daySlots.find((row) => row.period === period);
         if (!slot) continue;
         const assignment = db.prepare(`SELECT * FROM assignments
-          WHERE service_slot_id=? AND member_id=? AND status='CONFIRMED' AND service_type='ORDINARY'`).get(slot.id, targetMember.id);
+          WHERE service_slot_id=? AND member_id=? AND status='CONFIRMED'
+            AND (?=0 OR service_type='ORDINARY')`).get(slot.id, targetMember.id, ordinaryOnly ? 1 : 0);
         if (!assignment) continue;
         db.prepare('UPDATE assignments SET display_prefix=?,updated_at=? WHERE id=?')
           .run(displayPrefix, now(), assignment.id);
-        audit({ action: 'BOT_ORDINARY_JUSTIFICATION', entityType: 'ASSIGNMENT', entityId: assignment.id,
+        audit({ action: ordinaryOnly ? 'BOT_ORDINARY_JUSTIFICATION' : 'BOT_SERVICE_ANNOTATION', entityType: 'ASSIGNMENT', entityId: assignment.id,
           before: assignment, after: db.prepare('SELECT * FROM assignments WHERE id=?').get(assignment.id),
           reason: `Justificativa registrada por ${requestedBy.rank} ${requestedBy.operational_name}` });
         updated += 1;
@@ -1739,11 +1769,11 @@ function justifyOrdinaryAssignments(targetMember, choices, displayPrefix, reques
 
   const requestedDates = [...new Set(choices.map((choice) =>
     `${String(choice.day).padStart(2, '0')}/${String(competency.month).padStart(2, '0')}/${competency.year}`))];
-  const summary = `*JUSTIFICATIVA ${updated ? 'REGISTRADA' : 'NÃO REGISTRADA'}*
+  const summary = `*${updated ? registeredHeading : notRegisteredHeading}*
 Data: ${requestedDates.join(', ')}
-Militar: ${targetMember.rank} ${targetMember.operational_name}`;
+Militar: ${targetMember.rank} ${targetMember.operational_name}${!ordinaryOnly && updated ? ` (${displayPrefix})` : ''}`;
   return updated ? summary : `${summary}
-Nenhuma escala ordinária encontrada nessa data e turno.`;
+${ordinaryOnly ? 'Nenhuma escala ordinária encontrada' : 'Nenhum serviço encontrado'} nessa data e turno.`;
 }
 
 function parseSingleChangeChoice(value, { optional = false } = {}) {
@@ -1856,12 +1886,12 @@ A posição de destino é ${targetPosition}.`;
 }
 
 function swapExtraAssignments(requestedBy, firstMember, firstChoice, secondMember, secondChoice) {
-  if (firstMember.id === secondMember.id) return 'Informe dois militares diferentes para realizar a permuta.';
+  if (firstMember.id === secondMember.id) return 'Informe dois militares diferentes para realizar a troca.';
   const first = ensureExtraSource(firstMember, firstChoice);
   if (first.error) return first.error;
   const second = ensureExtraSource(secondMember, secondChoice);
   if (second.error) return second.error;
-  if (first.slot.id === second.slot.id) return 'Os dois militares já estão no mesmo horário. Nenhuma permuta foi necessária.';
+  if (first.slot.id === second.slot.id) return 'Os dois militares já estão no mesmo horário. Nenhuma troca foi necessária.';
   const firstDestinationError = destinationError(firstMember, second.slot, first.assignment.id);
   if (firstDestinationError) return firstDestinationError;
   const secondDestinationError = destinationError(secondMember, first.slot, second.assignment.id);
@@ -1882,8 +1912,8 @@ function swapExtraAssignments(requestedBy, firstMember, firstChoice, secondMembe
     after: {
       first: db.prepare('SELECT * FROM assignments WHERE id=?').get(first.assignment.id),
       second: db.prepare('SELECT * FROM assignments WHERE id=?').get(second.assignment.id)
-    }, reason: `Permuta solicitada por ${requestedBy.rank} ${requestedBy.operational_name}` });
-  return `*PERMUTA REALIZADA*
+    }, reason: `Troca solicitada por ${requestedBy.rank} ${requestedBy.operational_name}` });
+  return `*TROCA REALIZADA*
 
 ${firstMember.rank} ${firstMember.operational_name}:
 ${dayjs(first.slot.service_date).format('DD/MM/YYYY')} ${periodLabel(first.slot.period)} → ${dayjs(second.slot.service_date).format('DD/MM/YYYY')} ${periodLabel(second.slot.period)}
@@ -1891,7 +1921,7 @@ ${dayjs(first.slot.service_date).format('DD/MM/YYYY')} ${periodLabel(first.slot.
 ${secondMember.rank} ${secondMember.operational_name}:
 ${dayjs(second.slot.service_date).format('DD/MM/YYYY')} ${periodLabel(second.slot.period)} → ${dayjs(first.slot.service_date).format('DD/MM/YYYY')} ${periodLabel(first.slot.period)}
 
-Somente os dois serviços extras informados foram permutados.`;
+Somente os dois serviços extras informados foram trocados.`;
 }
 
 async function changeExtraAssignment(socket, message, body, directText, targets, requestedBy) {
@@ -1907,7 +1937,7 @@ async function changeExtraAssignment(socket, message, body, directText, targets,
     const selfPattern = new RegExp(`\\b(?:COMIGO|MIM|EU|${senderName})\\b`, 'g');
     const selfMatches = [...normalized.matchAll(selfPattern)];
     if (selfMatches.length !== 1) {
-      return 'Marque o outro militar e escreva *por mim* na troca ou *comigo* na permuta. Exemplo: *@Escalante permute @militar dia 17 noite comigo dia 20 dia*. Nenhuma alteração foi feita.';
+      return 'Marque o outro militar e escreva *por mim* para assumir o serviço ou *comigo* para trocar horários. Exemplo: *@Escalante troque @militar dia 17 noite comigo dia 20 dia*. Nenhuma alteração foi feita.';
     }
     const self = selfMatches[0];
     segments = [
@@ -1938,9 +1968,6 @@ async function changeExtraAssignment(socket, message, body, directText, targets,
   const second = parseSingleChangeChoice(segments[1].text, { optional: true });
   if (second.error) return second.error;
   if (!second.choice) {
-    if (/\b(?:PERMUTA|PERMUTAR|PERMUTE)\b/.test(normalized)) {
-      return 'Na permuta, informe também o dia e o turno do segundo militar.';
-    }
     return replaceExtraMember(requestedBy, segments[0].member, segments[1].member, first.choice);
   }
   return swapExtraAssignments(requestedBy, segments[0].member, first.choice, segments[1].member, second.choice);

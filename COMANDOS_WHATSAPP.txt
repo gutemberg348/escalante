@@ -214,29 +214,54 @@ A justificativa só altera uma escala ORDINÁRIA que já exista para aquele mili
 data e turno. Ela não cria vaga, serviço extra nem horas.
 Sem informar o turno, verifica os dois turnos do dia.
 
+PERMUTA, ATESTADO E DISPENSA COMO OBSERVAÇÃO
+-------------------------------------------
 
-8. TROCAR, PERMUTAR OU REMANEJAR SERVIÇOS EXTRAS
+   @Escalante permuta @Militar dia 28 (Sgt Pedro Neto)
+   @Escalante permuta @Militar dia 28 noite (Sgt Pedro Neto)
+   @Escalante atestado @Militar dia 28
+   @Escalante dispensado @Militar dia 28
+   @Escalante dispensa @Militar dia 28 noite
+   /permuta @Militar dia 28 (Sgt Pedro Neto)
+   /atestado @Militar dia 28
+   /dispensado @Militar dia 28
+
+O nome cadastrado continua no serviço e a observação aparece depois dele:
+   Sgt Jansen (Sgt Pedro Neto)
+   Sgt Jansen (ATESTADO)
+   Sgt Jansen (DISPENSADO)
+
+Esses comandos registram observações em serviços ORDINÁRIOS ou EXTRAS que já
+existam. Não mudam o militar, a posição, o tipo do serviço nem as horas.
+Sem turno, registram nos serviços existentes de dia e noite. Se não houver
+serviço para o militar naquela data e turno, nenhuma marcação será criada.
+O bot confirma com PERMUTA REGISTRADA, ATESTADO REGISTRADO ou DISPENSA REGISTRADA,
+informando a data e o nome com a observação. A permuta exige o nome do outro
+militar entre parênteses; para trocar efetivamente os serviços, use "troque".
+
+
+8. TROCAR OU REMANEJAR SERVIÇOS EXTRAS
 ------------------------------------------------
 
 Trocar um militar por outro no mesmo horário:
    @Escalante troque @Militar1 dia 17 noite por @Militar2
    @Escalante substituir @Militar1 dia 17 noite por @Militar2
 
-Permutar dois militares entre horários:
-   @Escalante permute @Militar1 dia 17 noite com @Militar2 dia 20 dia
+Trocar dois militares entre horários:
+   @Escalante troque @Militar1 dia 17 noite com @Militar2 dia 20 dia
 
 Quando você for o segundo militar, não precisa marcar seu próprio contato:
    @Escalante troque @Militar dia 17 noite por mim
-   @Escalante permute @Militar dia 17 noite comigo dia 20 dia
-   @Escalante permute @Militar dia 17 noite e eu dia 20 dia
+   @Escalante troque @Militar dia 17 noite comigo dia 20 dia
+   @Escalante troque @Militar dia 17 noite e eu dia 20 dia
 
 Também pode escrever seu próprio posto e nome cadastrado:
    @Escalante troque @Militar dia 17 noite por Sgt Jansen
-   @Escalante permute @Militar dia 17 noite com Sgt Jansen dia 20 dia
+   @Escalante troque @Militar dia 17 noite com Sgt Jansen dia 20 dia
 
-"Mim", "eu" e "comigo" identificam quem enviou a mensagem. Na permuta,
-informe o dia e o turno dos dois serviços. Na troca, o outro militar é retirado
-daquele serviço extra e você assume a mesma posição.
+"Mim", "eu" e "comigo" identificam quem enviou a mensagem. Para trocar dois
+serviços, informe o dia e o turno de ambos. Para assumir o serviço do outro
+militar, informe somente o horário dele e escreva "por mim".
 
 Remanejar o mesmo militar para outro horário:
    @Escalante remaneje @Militar dia 17 noite para dia 20 dia
@@ -244,7 +269,6 @@ Remanejar o mesmo militar para outro horário:
 Palavras aceitas:
    troca, trocar, troque
    substitui, substituir, substitua
-   permuta, permutar, permute
    remaneja, remanejar, remaneje
 
 Cada lado deve informar exatamente um turno.
@@ -438,7 +462,9 @@ REGRAS IMPORTANTES
 - O mesmo militar não pode ocupar duas posições no mesmo turno.
 - O limite mensal aparece como alerta no painel, mas não bloqueia a marcação no grupo.
 - Justificativa não cria marcação.
-- Retirar, trocar, permutar e remanejar pelo grupo afetam somente serviços extras.
+- Retirar, trocar e remanejar pelo grupo afetam somente serviços extras.
+- Permuta, atestado e dispensa registram observações depois do nome em serviços
+  existentes; não trocam militares nem alteram posições, tipos ou horas.
 - Fechar coluna com EXCLUA é uma ação destrutiva.
 - A fila vale somente para a data e coluna informadas.
 - Ao terminar o último militar, a fila encerra e a marcação fica livre.
