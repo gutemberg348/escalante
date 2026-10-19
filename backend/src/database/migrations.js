@@ -274,6 +274,45 @@ const migrations = [
         db.exec('ALTER TABLE members ADD COLUMN ordinary_eligible INTEGER NOT NULL DEFAULT 1');
       }
     }
+  },
+  {
+    version: '017_five_wing_planning',
+    apply() {
+      const stamp = now();
+      const insert = db.prepare('INSERT OR IGNORE INTO wings (name,code,created_at,updated_at) VALUES (?,?,?,?)');
+      for (let number = 1; number <= 5; number += 1) insert.run(`Ala ${number}`, `ALA-${number}`, stamp, stamp);
+      db.exec(`CREATE TABLE IF NOT EXISTS wing_cycle_rules (
+        effective_month TEXT PRIMARY KEY, reference_date TEXT NOT NULL,
+        mode TEXT NOT NULL CHECK(mode IN ('CONTINUOUS','MONTHLY_RESET')),
+        updated_by INTEGER REFERENCES users(id), updated_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS wing_memberships (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, member_id INTEGER NOT NULL REFERENCES members(id),
+        wing_id INTEGER NOT NULL REFERENCES wings(id), position_number INTEGER NOT NULL CHECK(position_number IN (1,2)),
+        effective_month TEXT NOT NULL, updated_by INTEGER REFERENCES users(id), updated_at TEXT NOT NULL,
+        UNIQUE(member_id,effective_month)
+      );
+      CREATE INDEX IF NOT EXISTS idx_wing_membership_month ON wing_memberships(effective_month,member_id);
+      CREATE TABLE IF NOT EXISTS wing_month_overrides (
+        competency_id INTEGER NOT NULL REFERENCES competencies(id), member_id INTEGER NOT NULL REFERENCES members(id),
+        wing_id INTEGER NOT NULL REFERENCES wings(id), position_number INTEGER NOT NULL CHECK(position_number IN (1,2)),
+        from_date TEXT NOT NULL,
+        updated_by INTEGER REFERENCES users(id), updated_at TEXT NOT NULL,
+        PRIMARY KEY(competency_id,member_id,from_date)
+      );`);
+    }
+  },
+  {
+    version: '018_continuous_wings_only',
+    apply() {
+      const original = db.prepare('SELECT reference_date FROM wing_cycle_rules ORDER BY effective_month LIMIT 1').get();
+      if (original) db.prepare("UPDATE wing_cycle_rules SET mode='CONTINUOUS',reference_date=?,updated_at=?")
+        .run(original.reference_date, now());
+      db.exec(`CREATE TRIGGER IF NOT EXISTS wing_cycle_continuous_insert BEFORE INSERT ON wing_cycle_rules
+        WHEN NEW.mode<>'CONTINUOUS' BEGIN SELECT RAISE(ABORT, 'O ciclo das alas deve ser continuo'); END;
+        CREATE TRIGGER IF NOT EXISTS wing_cycle_continuous_update BEFORE UPDATE ON wing_cycle_rules
+        WHEN NEW.mode<>'CONTINUOUS' BEGIN SELECT RAISE(ABORT, 'O ciclo das alas deve ser continuo'); END;`);
+    }
   }
 ];
 

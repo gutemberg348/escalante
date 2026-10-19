@@ -4,6 +4,7 @@ import { api } from './api/client.js';
 import Login from './pages/Login.jsx';
 import Dashboard from './pages/Dashboard.jsx';
 import Members from './pages/Members.jsx';
+import Wings from './pages/Wings.jsx';
 import Seniority from './pages/Seniority.jsx';
 import Competencies from './pages/Competencies.jsx';
 import ServiceSlots from './pages/ServiceSlots.jsx';
@@ -14,6 +15,7 @@ import Settings from './pages/Settings.jsx';
 const links = [
   ['/dashboard', 'Visão geral', 'overview'],
   ['/efetivo', 'Efetivo', 'members'],
+  ['/alas', 'Alas', 'members'],
   ['/antiguidade', 'Antiguidade', 'seniority'],
   ['/horarios', 'Gestão do mês', 'calendar'],
   ['/gerenciar-escala', 'Gerenciar escala', 'schedule'],
@@ -49,6 +51,7 @@ function Layout() {
     <div className="sidebar-foot"><div className="environment"><span />Ambiente de simulação</div><div className="user"><div className="avatar">{session.data.name.slice(0, 1)}</div><div><strong>{session.data.name}</strong><span>{session.data.role.replaceAll('_', ' ')}</span></div><button className="link" title="Sair" onClick={logout}>↗</button></div></div>
   </aside><main><div className="topbar"><div><span className="eyebrow">CICC / GESTÃO DE ESCALA</span><strong>Central de operação</strong></div><div className="topbar-status"><span />Sistema operacional</div></div>
     <div className="page-content"><Routes>
+      <Route path="/alas" element={<Wings />} />
       <Route path="/dashboard" element={<Dashboard />} /><Route path="/efetivo" element={<Members />} /><Route path="/antiguidade" element={<Seniority />} /><Route path="/competencias" element={<Competencies />} /><Route path="/horarios" element={<ServiceSlots />} /><Route path="/gerenciar-escala" element={<ScheduleManagement />} /><Route path="/whatsapp" element={<WhatsApp />} /><Route path="/configuracoes" element={<Settings />} /><Route path="*" element={<Navigate to="/dashboard" replace />} />
     </Routes></div>
   </main></div>;

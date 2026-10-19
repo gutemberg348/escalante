@@ -11,6 +11,7 @@ import seniorityRoutes from './modules/seniority/routes.js';
 import competencyRoutes from './modules/competencies/routes.js';
 import serviceSlotRoutes from './modules/service-slots/routes.js';
 import whatsappRoutes from './modules/whatsapp/routes.js';
+import wingRoutes from './modules/wings/routes.js';
 import { requireAuth } from './middlewares/auth.js';
 
 const app = express();
@@ -27,6 +28,7 @@ app.use('/api/seniority', requireAuth, seniorityRoutes);
 app.use('/api/competencies', requireAuth, competencyRoutes);
 app.use('/api/service-slots', requireAuth, serviceSlotRoutes);
 app.use('/api/whatsapp', requireAuth, whatsappRoutes);
+app.use('/api/wings', requireAuth, wingRoutes);
 app.get('/api/dashboard', requireAuth, (_, res) => {
   const today = new Date();
   const currentMonthIndex = today.getFullYear() * 12 + today.getMonth() + 1;

@@ -14,7 +14,7 @@ process.env.ADMIN_INITIAL_PASSWORD = 'isolated-test-password';
 const { db, now } = await import('../src/database/index.js');
 const { runMigrations } = await import('../src/database/migrations.js');
 const { ensureCompetencySchedule } = await import('../src/scheduling/monthly.js');
-const { buildMarkingSchedule, handleIncomingMessages, parseMarkingSchedulePlan, parseMemberStatusCommand, parseNaturalChoices } = await import('../src/messaging/whatsapp.js');
+const { activeCompetency, setActiveWhatsAppCompetency, buildMarkingSchedule, handleIncomingMessages, parseMarkingSchedulePlan, parseMemberStatusCommand, parseNaturalChoices } = await import('../src/messaging/whatsapp.js');
 const { assignmentCellsBySlot } = await import('../src/messaging/schedule-pdf.js');
 runMigrations();
 
@@ -57,6 +57,8 @@ beforeEach(() => {
     UPDATE members SET seniority_position=2 WHERE id=18;
     UPDATE members SET seniority_position=3 WHERE id=19;`);
   setting.run('bot_active_competency_id', String(competency.id), stamp);
+  setting.run('bot_active_selection_month', '', stamp);
+  setting.run('whatsapp_admin_member_ids', '[]', stamp);
   setting.run('bot_marking_round_starts_at', '', stamp);
   setting.run('bot_pending_vacation_confirmation', '', stamp);
   replies = [];
@@ -549,13 +551,13 @@ test('a group exchange command never changes an ordinary assignment', async () =
   assert.match(replies.at(-1).text, /ordinário/i);
 });
 
-test('only a group administrator can open a schedule column', async () => {
+test('only a configured administrator can open a schedule column', async () => {
   await receive('@Escalante abrir 3ª coluna dia 17', [bot]);
 
   const capacities = db.prepare(`SELECT DISTINCT current_capacity FROM service_slots
     WHERE competency_id=? AND service_date=?`).all(competency.id, `${futureYear}-09-17`);
   assert.deepEqual(capacities, [{ current_capacity: 2 }]);
-  assert.match(replies.at(-1).text, /Somente administradores do grupo/i);
+  assert.match(replies.at(-1).text, /Somente administradores configurados no painel WhatsApp/i);
 });
 
 test('status parser recognizes management variants but not parenthetical justifications', () => {
@@ -663,8 +665,8 @@ test('returning a member from vacation by natural WhatsApp command regenerates t
   assert.ok(replies.some((reply) => reply.document && reply.mimetype === 'application/pdf'));
 });
 
-test('a group administrator can open the fourth column on one date only', async () => {
-  socket.groupMetadata = async () => ({ participants: [{ id: sender, admin: 'admin' }] });
+test('a configured administrator can open the fourth column on one date only', async () => {
+  setting.run('whatsapp_admin_member_ids', '[1]', stamp);
 
   await receive('@Escalante liberar 4ª coluna dia 17', [bot]);
 
@@ -830,7 +832,7 @@ A marcação pode iniciar agora
   assert.match(plan.error, /mesmo dia|novo cronograma/i);
 });
 
-test('only a group administrator can import and start a complete pasted schedule', async () => {
+test('only a configured administrator can import and start a complete pasted schedule', async () => {
   await receive(`@Escalante
 ESCALA DE SETEMBRO
 A marcação pode iniciar agora
@@ -840,11 +842,11 @@ A marcação pode iniciar agora
 2. Sgt Alex — até 09h
 3. Sgt Outro — até 10h`, [bot]);
 
-  assert.match(replies.at(-1).text, /Somente administradores do grupo podem preencher horários e iniciar a fila/i);
+  assert.match(replies.at(-1).text, /Somente administradores configurados no painel WhatsApp podem preencher horários e iniciar a fila/i);
 });
 
 test('an imported schedule accepts a subset and skips omitted eligible members', async () => {
-  socket.groupMetadata = async () => ({ participants: [{ id: sender, admin: 'admin' }] });
+  setting.run('whatsapp_admin_member_ids', '[1]', stamp);
 
   await receive(`@Escalante
 ESCALA DE SETEMBRO
@@ -869,7 +871,7 @@ A marcação pode iniciar agora
 });
 
 test('a member on vacation remains in the pasted schedule and marking queue', async () => {
-  socket.groupMetadata = async () => ({ participants: [{ id: sender, admin: 'admin' }] });
+  setting.run('whatsapp_admin_member_ids', '[1]', stamp);
   db.prepare("UPDATE members SET operational_status='VACATION' WHERE id=18").run();
 
   await receive(`@Escalante
@@ -892,22 +894,22 @@ A marcação pode iniciar agora
   assert.match(displayed.text, /Sgt Alex — até 09h/);
 });
 
-test('starting the schedule is recognized and restricted to group administrators', async () => {
+test('starting the schedule is recognized and restricted to configured administrators', async () => {
   await receive('@Escalante começar cronograma', [bot]);
 
-  assert.match(replies.at(-1).text, /Somente administradores do grupo podem iniciar ou reiniciar/i);
+  assert.match(replies.at(-1).text, /Somente administradores configurados no painel WhatsApp podem iniciar ou reiniciar/i);
 });
 
 test('an administrator must provide the start date and column when starting a schedule', async () => {
-  socket.groupMetadata = async () => ({ participants: [{ id: sender, admin: 'admin' }] });
+  setting.run('whatsapp_admin_member_ids', '[1]', stamp);
 
   await receive('@Escalante começar cronograma', [bot]);
 
   assert.match(replies.at(-1).text, /Informe a coluna/i);
 });
 
-test('a group administrator can stop a scheduled queue and leave marking free', async () => {
-  socket.groupMetadata = async () => ({ participants: [{ id: sender, admin: 'admin' }] });
+test('a configured administrator can stop a scheduled queue and leave marking free', async () => {
+  setting.run('whatsapp_admin_member_ids', '[1]', stamp);
   const futureStart = new Date(Date.now() + 86_400_000).toISOString();
   db.prepare(`INSERT INTO marking_turns (member_id,deadline_at,active,created_by,created_at)
     VALUES (1,?,1,1,?)`).run(futureStart, stamp);
@@ -921,18 +923,18 @@ test('a group administrator can stop a scheduled queue and leave marking free', 
   assert.match(replies.at(-1).text, /marcação agora está livre/i);
 });
 
-test('only a group administrator can stop the marking queue', async () => {
+test('only a configured administrator can stop the marking queue', async () => {
   db.prepare(`INSERT INTO marking_turns (member_id,deadline_at,active,created_by,created_at)
     VALUES (1,?,1,1,?)`).run(new Date(Date.now() + 86_400_000).toISOString(), stamp);
 
   await receive('@Escalante deixar a marcação livre', [bot]);
 
   assert.equal(db.prepare('SELECT COUNT(*) total FROM marking_turns WHERE active=1').get().total, 1);
-  assert.match(replies.at(-1).text, /Somente administradores do grupo podem encerrar/i);
+  assert.match(replies.at(-1).text, /Somente administradores configurados no painel WhatsApp podem encerrar/i);
 });
 
-test('a group administrator can open the fourth column on the whole month except selected days', async () => {
-  socket.groupMetadata = async () => ({ participants: [{ id: sender, admin: 'admin' }] });
+test('a configured administrator can open the fourth column on the whole month except selected days', async () => {
+  setting.run('whatsapp_admin_member_ids', '[1]', stamp);
 
   await receive('@Escalante abrir 4ª coluna exceto dias 17 e 18', [bot]);
 
@@ -947,8 +949,8 @@ test('a group administrator can open the fourth column on the whole month except
   ]);
 });
 
-test('a group administrator can open a column only on selected days with slash command', async () => {
-  socket.groupMetadata = async () => ({ participants: [{ id: sender, admin: 'admin' }] });
+test('a configured administrator can open a column only on selected days with slash command', async () => {
+  setting.run('whatsapp_admin_member_ids', '[1]', stamp);
 
   await receive('/abrir 4ª coluna somente dias 5, 10 e 20', []);
 
@@ -962,8 +964,8 @@ test('a group administrator can open a column only on selected days with slash c
   ]);
 });
 
-test('a group administrator can open a column on the whole month with natural variations', async () => {
-  socket.groupMetadata = async () => ({ participants: [{ id: sender, admin: 'admin' }] });
+test('a configured administrator can open a column on the whole month with natural variations', async () => {
+  setting.run('whatsapp_admin_member_ids', '[1]', stamp);
 
   await receive('@Escalante abrir 4 coluna em todos os dias', [bot]);
 
@@ -972,8 +974,8 @@ test('a group administrator can open a column on the whole month with natural va
   assert.deepEqual(capacities, [{ current_capacity: 4 }]);
 });
 
-test('a group administrator can use menos as a synonym for exceto', async () => {
-  socket.groupMetadata = async () => ({ participants: [{ id: sender, admin: 'admin' }] });
+test('a configured administrator can use menos as a synonym for exceto', async () => {
+  setting.run('whatsapp_admin_member_ids', '[1]', stamp);
 
   await receive('@Escalante abrir quarta coluna menos os dias 5 e 10', [bot]);
 
@@ -987,7 +989,7 @@ test('a group administrator can use menos as a synonym for exceto', async () => 
 });
 
 test('closing an occupied column warns first and only deletes after EXCLUA', async () => {
-  socket.groupMetadata = async () => ({ participants: [{ id: sender, admin: 'superadmin' }] });
+  setting.run('whatsapp_admin_member_ids', '[1]', stamp);
   const serviceDate = `${futureYear}-09-17`;
   const slot = db.prepare(`SELECT id FROM service_slots WHERE competency_id=? AND service_date=? AND period='DIURNO'`)
     .get(competency.id, serviceDate);
@@ -1048,7 +1050,7 @@ for (const input of ['20 dia ou noite', '20, 12h', '20 dia; 32 noite', '20 dia; 
   test(`uncertain delegated command writes nothing: ${input}`, async () => {
     await receive(`@Escalante marque @Alex ${input}`);
     assert.deepEqual(assignedIds(), []);
-    assert.match(replies[0].text, /Nenhuma marcação foi feita/);
+    assert.match(replies[0].text, /Nenhuma (marcação|alteração) foi feita/);
   });
 }
 test('a list with clock times records the right dates, shifts and member', async () => {
@@ -1058,4 +1060,185 @@ test('a list with clock times records the right dates, shifts and member', async
     { member_id: 18, service_date: `${futureYear}-09-20`, period: 'DIURNO' },
     { member_id: 18, service_date: `${futureYear}-09-21`, period: 'NOTURNO' }
   ]);
+});
+
+function generatedMonth(year, month) {
+  const { competency: item } = ensureCompetencySchedule(`${year}-${String(month).padStart(2, '0')}-01`);
+  db.prepare('UPDATE competencies SET generated_at=? WHERE id=?').run(stamp, item.id);
+  return item;
+}
+function bookedDates() {
+  return db.prepare(`SELECT a.member_id,s.service_date,s.period FROM assignments a
+    JOIN service_slots s ON s.id=a.service_slot_id ORDER BY s.service_date,s.period,a.member_id`).all();
+}
+
+test('named month booking uses that month without changing the default or adding day 11', async () => {
+  generatedMonth(futureYear, 11);
+  await receive('@Escalante marque @Alex dia 20 noite no mês 11');
+  assert.deepEqual(bookedDates(), [{ member_id: 18, service_date: `${futureYear}-11-20`, period: 'NOTURNO' }]);
+  assert.equal(activeCompetency().id, competency.id);
+  assert.match(replies[0].text, /Novembro/i);
+  await receive('@Escalante marque @Alex dia 21 dia');
+  assert.ok(bookedDates().some((item) => item.service_date === `${futureYear}-09-21`));
+});
+
+test('self booking and full dates honor the explicit year and month', async () => {
+  generatedMonth(futureYear + 1, 3);
+  await receive(`/marcar dia 20 dia em março de ${futureYear + 1}`, []);
+  await receive(`/marcar dia 21/03/${futureYear + 1} noite`, []);
+  assert.deepEqual(bookedDates(), [
+    { member_id: 1, service_date: `${futureYear + 1}-03-20`, period: 'DIURNO' },
+    { member_id: 1, service_date: `${futureYear + 1}-03-21`, period: 'NOTURNO' }
+  ]);
+});
+
+test('multiple mentioned members share the explicit month without changing their identities', async () => {
+  generatedMonth(futureYear, 11);
+  await receive('@Escalante escalar @Alex dia 20 dia e @Outro dia 21 noite em novembro', [bot, alex, other]);
+  assert.deepEqual(bookedDates(), [
+    { member_id: 18, service_date: `${futureYear}-11-20`, period: 'DIURNO' },
+    { member_id: 19, service_date: `${futureYear}-11-21`, period: 'NOTURNO' }
+  ]);
+});
+
+test('different months in a multi-member request are rejected before any write', async () => {
+  await receive('@Escalante escalar @Alex dia 20 dia novembro e @Outro dia 21 noite dezembro', [bot, alex, other]);
+  assert.deepEqual(bookedDates(), []);
+  assert.match(replies[0].text, /somente um mês/);
+});
+
+test('unavailable and invalid explicit months never book in the selected month', async () => {
+  for (const selector of [`mês 8 de ${futureYear + 2}`, 'mês 13', 'novembro e dezembro']) {
+    await receive(`@Escalante marque @Alex dia 20 noite ${selector}`);
+    assert.deepEqual(bookedDates(), []);
+    assert.match(replies.at(-1).text, /Nenhuma alteração foi feita/);
+  }
+});
+
+test('PDF month selectors choose the exact generated month and keep it for following commands', async () => {
+  const target = generatedMonth(futureYear, 11);
+  for (const selector of ['mês 11', '11', 'novembro', `11/${futureYear}`]) {
+    await receive(`/escala ${selector}`, []);
+    assert.equal(activeCompetency().id, target.id);
+    assert.equal(replies.at(-1).fileName, `escala-${futureYear}-11.pdf`);
+  }
+  await receive('/marcar dia 22 noite', []);
+  assert.equal(bookedDates()[0].service_date, `${futureYear}-11-22`);
+});
+
+test('next month means the next calendar month even when the selected month is far ahead', async () => {
+  const today = new Date();
+  const next = new Date(today.getFullYear(), today.getMonth() + 1, 1);
+  const target = generatedMonth(next.getFullYear(), next.getMonth() + 1);
+  await receive('@Escalante marque @Alex dia 20 noite no mês que vem');
+  assert.equal(bookedDates()[0].service_date, `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, '0')}-20`);
+  assert.equal(activeCompetency().id, competency.id);
+  await receive('/escala próximo mês', []);
+  assert.equal(activeCompetency().id, target.id);
+  await receive('/escala mês que vem', []);
+  assert.equal(activeCompetency().id, target.id);
+});
+
+test('this month PDF and stale selection rollover choose the calendar month', async () => {
+  const today = new Date();
+  const current = generatedMonth(today.getFullYear(), today.getMonth() + 1);
+  const previousDate = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+  const previous = generatedMonth(previousDate.getFullYear(), previousDate.getMonth() + 1);
+  setting.run('bot_active_competency_id', String(previous.id), stamp);
+  setting.run('bot_active_selection_month', `${previous.year}-${String(previous.month).padStart(2, '0')}`, stamp);
+  assert.equal(activeCompetency().id, current.id);
+  // Deliberately consulting an old month stays selected until the next rollover.
+  setActiveWhatsAppCompetency(previous.id);
+  assert.equal(activeCompetency().id, previous.id);
+  await receive('/escala este mês', []);
+  assert.equal(activeCompetency().id, current.id);
+  assert.equal(replies.at(-1).fileName, `escala-${current.year}-${String(current.month).padStart(2, '0')}.pdf`);
+});
+
+test('concurrent bookings keep their explicit months isolated and leave the default unchanged', async () => {
+  generatedMonth(futureYear, 11);
+  generatedMonth(futureYear, 12);
+  await Promise.all([
+    receive('@Escalante marque @Alex dia 20 noite em novembro'),
+    receive('@Escalante marque @Outro dia 21 dia em dezembro', [bot, other])
+  ]);
+  assert.deepEqual(bookedDates(), [
+    { member_id: 18, service_date: `${futureYear}-11-20`, period: 'NOTURNO' },
+    { member_id: 19, service_date: `${futureYear}-12-21`, period: 'DIURNO' }
+  ]);
+  assert.equal(activeCompetency().id, competency.id);
+});
+
+test('booking another month does not consume the turn of the selected month', async () => {
+  generatedMonth(futureYear, 11);
+  db.prepare('INSERT INTO marking_turns (member_id,deadline_at,active,created_by,created_at) VALUES (?,?,1,1,?)')
+    .run(18, `${futureYear}-09-25T20:00:00`, stamp);
+  const originalTurn = db.prepare('SELECT id FROM marking_turns WHERE active=1').get();
+  await receive('@Escalante marque @Alex dia 20 noite novembro');
+  assert.equal(bookedDates()[0].service_date, `${futureYear}-11-20`);
+  assert.deepEqual(db.prepare('SELECT id FROM marking_turns WHERE active=1').get(), originalTurn);
+});
+
+test('querying another month returns its assignments without changing the default', async () => {
+  generatedMonth(futureYear, 11);
+  await receive('/marcar dia 20 noite novembro', []);
+  await receive('/minhas mês 11', []);
+  assert.match(replies.at(-1).text, new RegExp(`20/11/${futureYear}`));
+  assert.equal(activeCompetency().id, competency.id);
+});
+
+test('a group superadmin without panel permission cannot manage the schedule or generate a month', async () => {
+  socket.groupMetadata = async () => ({ participants: [{ id: sender, admin: 'superadmin' }] });
+  const count = db.prepare('SELECT COUNT(*) n FROM competencies').get().n;
+  for (const command of ['/abrir 3 coluna', '/fechar 4 coluna EXCLUA', '/iniciar cronograma dia 25/09/2030 2 coluna',
+    '/parar cronograma', '/gerar-proximo-mes', '/confirmar-gerar-proximo-mes', '@Escalante gerar escala do próximo mês']) {
+    await receive(command, [bot]);
+    assert.match(replies.at(-1).text, /administradores configurados no painel WhatsApp/);
+  }
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM competencies').get().n, count);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM schedule_pdf_column_releases').get().n, 0);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM marking_turns').get().n, 0);
+});
+
+test('quoting or mentioning a configured admin never transfers permission to the sender', async () => {
+  setting.run('whatsapp_admin_member_ids', '[18]', stamp);
+  await receive('@Escalante abrir 3 coluna @Alex', [bot, alex]);
+  assert.match(replies.at(-1).text, /administradores configurados/);
+  await receive('@Escalante', [bot], { participant: alex, stanzaId: 'quoted-admin-command',
+    quotedMessage: { conversation: '/abrir 3 coluna' } });
+  assert.match(replies.at(-1).text, /administradores configurados/);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM schedule_pdf_column_releases').get().n, 0);
+});
+
+test('revoked or inactive configured administrators lose permission immediately', async () => {
+  setting.run('whatsapp_admin_member_ids', '[1]', stamp);
+  await receive('/abrir 3 coluna dia 20', []);
+  assert.match(replies.at(-1).text, /COLUNA ABERTA/);
+  setting.run('whatsapp_admin_member_ids', '[]', stamp);
+  await receive('/abrir 4 coluna dia 20', []);
+  assert.match(replies.at(-1).text, /administradores configurados/);
+  setting.run('whatsapp_admin_member_ids', '[1]', stamp);
+  db.prepare('UPDATE members SET active=0 WHERE id=1').run();
+  await receive('/abrir 4 coluna dia 20', []);
+  assert.match(replies.at(-1).text, /administradores configurados/);
+});
+
+test('a configured administrator identified by LID can open columns without being group admin', async () => {
+  setting.run('whatsapp_admin_member_ids', '[18]', stamp);
+  await handleIncomingMessages(socket, { messages: [{
+    key: { id: `in-${++sequence}`, remoteJid: group, participant: lid, fromMe: false },
+    message: { conversation: '/abrir 3 coluna dia 20' }
+  }] });
+  assert.match(replies.at(-1).text, /COLUNA ABERTA/);
+});
+
+test('configured administrators can request generation and normal members can still consult the PDF', async () => {
+  setting.run('whatsapp_admin_member_ids', '[1]', stamp);
+  await receive('/gerar-proximo-mes', []);
+  assert.match(replies.at(-1).text, /CONFIRMAR GERAÇÃO/);
+  setting.run('whatsapp_admin_member_ids', '[]', stamp);
+  await receive('/escala', []);
+  assert.ok(replies.at(-1).document);
+  await receive('/marcar dia 20 noite', []);
+  assert.match(replies.at(-1).text, /confirmado/);
 });

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client.js';
+import { useMonthRollover } from '../hooks/useMonthRollover.js';
 
 const empty = { rank: 'Sgt', operational_name: '', unit_type: 'CICC', phone_number: '', whatsapp_jid: '', operational_status: 'ACTIVE', authorization_status: 'AUTHORIZED', active: true, monthly_hour_limit: '', hour_limit_exempt: false, ordinary_eligible: true, notes: '' };
 const operationalOptions = [['ACTIVE', 'Ativo'], ['INACTIVE', 'Desativado'], ['VACATION', 'Férias'], ['LEAVE', 'Licença'], ['AWAY', 'Afastado']];
@@ -25,6 +26,7 @@ export default function Members() {
   const [competencyId, setCompetencyId] = useState('');
   const { data: competencies = [] } = useQuery({ queryKey: ['competencies'], queryFn: () => api.get('/competencies').then(response => response.data.items) });
   const generatedCompetencies = competencies.filter(item => item.generated_at);
+  useMonthRollover(competencies, competencyId, setCompetencyId, Boolean(editing || deleteTarget));
   useEffect(() => {
     if (!generatedCompetencies.length || generatedCompetencies.some((item) => String(item.id) === String(competencyId))) return;
     const today = new Date();

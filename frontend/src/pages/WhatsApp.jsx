@@ -12,15 +12,17 @@ export default function WhatsApp() {
   });
   const { data: competencies = [] } = useQuery({ queryKey: ['competencies'], queryFn: () => api.get('/competencies').then((response) => response.data.items) });
   const generatedCompetencies = competencies.filter((item) => item.generated_at);
-  const [settings, setSettings] = useState({ targetNumber: '', groupJids: [], activeCompetencyId: '' });
-  useEffect(() => { if (connection) setSettings({ targetNumber: connection.configuredNumber || '', groupJids: connection.groupJids?.length ? connection.groupJids : (connection.groupJid ? [connection.groupJid] : []), activeCompetencyId: connection.activeCompetencyId ? String(connection.activeCompetencyId) : '' }); }, [connection]);
+  const { data: members = [] } = useQuery({ queryKey: ['members', 'whatsapp-admins'], queryFn: () => api.get('/members').then((response) => response.data.items) });
+  const [settings, setSettings] = useState({ targetNumber: '', groupJids: [], activeCompetencyId: '', adminMemberIds: [] });
+  const [dirty, setDirty] = useState(false);
+  useEffect(() => { if (connection && !dirty) setSettings({ targetNumber: connection.configuredNumber || '', groupJids: connection.groupJids?.length ? connection.groupJids : (connection.groupJid ? [connection.groupJid] : []), activeCompetencyId: connection.activeCompetencyId ? String(connection.activeCompetencyId) : '', adminMemberIds: connection.adminMemberIds || [] }); }, [connection, dirty]);
   const refreshConnection = () => queryClient.invalidateQueries({ queryKey: ['whatsapp'] });
-  const save = useMutation({ mutationFn: () => api.put('/whatsapp/settings', { ...settings, activeCompetencyId: settings.activeCompetencyId ? Number(settings.activeCompetencyId) : null }), onSuccess: refreshConnection });
+  const save = useMutation({ mutationFn: () => api.put('/whatsapp/settings', { ...settings, activeCompetencyId: settings.activeCompetencyId ? Number(settings.activeCompetencyId) : null }), onSuccess: (response) => { queryClient.setQueryData(['whatsapp'], response.data.item); setDirty(false); refreshConnection(); } });
   const connect = useMutation({ mutationFn: () => api.post('/whatsapp/connect'), onSuccess: refreshConnection });
   const disconnect = useMutation({ mutationFn: () => api.post('/whatsapp/disconnect'), onSuccess: refreshConnection });
   const resetSession = useMutation({ mutationFn: () => api.post('/whatsapp/reset-session'), onSuccess: refreshConnection });
   const groups = useQuery({ queryKey: ['whatsapp-groups'], queryFn: () => api.get('/whatsapp/groups').then((response) => response.data.items), enabled: connection?.status === 'CONNECTED' });
-  const set = (key, value) => setSettings((current) => ({ ...current, [key]: value }));
+  const set = (key, value) => { setDirty(true); save.reset(); setSettings((current) => ({ ...current, [key]: value })); };
   const busy = connect.isPending || disconnect.isPending || resetSession.isPending;
   const hasSession = Boolean(connection?.hasSession);
   const waitingQr = connection?.status === 'WAITING_QR';
@@ -47,8 +49,13 @@ export default function WhatsApp() {
         <form onSubmit={(event) => { event.preventDefault(); save.mutate(); }}>
           <label>Número do WhatsApp<input value={settings.targetNumber} onChange={(event) => set('targetNumber', event.target.value.replace(/\D/g, ''))} inputMode="numeric" placeholder="Ex.: 5583999999999" /><small>Somente números, com DDI e DDD.</small></label>
           <label>Grupos de destino<select className="group-multi-select" multiple size="6" value={settings.groupJids} onChange={(event) => set('groupJids', [...event.target.selectedOptions].map((option) => option.value))}>{groups.data?.map((group) => <option key={group.jid} value={group.jid}>{group.name}</option>)}</select><small>Use Ctrl (Windows) ou ⌘ (Mac) para selecionar mais de um grupo.</small></label>
+          <fieldset className="whatsapp-administrators" disabled={save.isPending}><legend>Administradores da escala no WhatsApp</legend><p>Escolha quem pode abrir/fechar colunas, iniciar/encerrar o cronograma e gerar a escala pelo bot. Ser administrador do grupo não concede essa permissão.</p>
+            <div className="whatsapp-administrator-options">{members.map((member) => <label key={member.id}><input type="checkbox" checked={settings.adminMemberIds.includes(member.id)} onChange={(event) => set('adminMemberIds', event.target.checked ? [...settings.adminMemberIds, member.id] : settings.adminMemberIds.filter((id) => id !== member.id))} /><span>{member.rank} {member.operational_name}{!member.active ? ' — desativado' : ''}</span></label>)}</div>
+            {!members.length && <small>Cadastre os responsáveis no Efetivo, com o telefone do WhatsApp.</small>}
+            {!settings.adminMemberIds.length && <small>Nenhum administrador selecionado: esses comandos ficam bloqueados para todos no WhatsApp.</small>}
+          </fieldset>
           <label>Mês enviado pelo /escala<select value={settings.activeCompetencyId} onChange={(event) => set('activeCompetencyId', event.target.value)}><option value="">Selecione um mês gerado</option>{generatedCompetencies.map((competency) => <option key={competency.id} value={competency.id}>{competency.name}</option>)}</select><small>Se este mês ficar no passado, o bot avança sozinho para o próximo mês gerado.</small></label>
-          <button disabled={save.isPending || !settings.activeCompetencyId}>Salvar WhatsApp ({settings.groupJids.length} grupos)</button>{save.isSuccess && <p className="success">Grupos e mês da escala salvos.</p>}{save.isError && <p className="error">{save.error.response?.data?.message || 'Confira os grupos e o mês selecionado.'}</p>}
+          <button disabled={save.isPending}>Salvar WhatsApp ({settings.groupJids.length} grupos)</button>{save.isSuccess && <p className="success">Grupos, administradores e mês da escala salvos.</p>}{save.isError && <p className="error">{save.error.response?.data?.message || 'Confira os grupos, administradores e o mês selecionado.'}</p>}
         </form>
       </article>
     </section>

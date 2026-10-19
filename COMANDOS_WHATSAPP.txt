@@ -39,6 +39,23 @@ COMANDOS NORMAIS
 
 Sem informar o turno, o dia será interpretado como 24 horas: dia e noite.
 
+Para escolher o mês da marcação:
+   /marcar dia 20 noite no próximo mês
+   /marcar dia 20 dia no mês que vem
+   /marcar dia 20 noite neste mês
+   /marcar dia 20 dia em novembro
+   /marcar dia 20 noite no mês 11
+   /marcar dia 20 dia em novembro de 2026
+   @Escalante marque @Militar dia 20 noite no mês 11
+
+Sem informar o mês, usa o mês selecionado na configuração WhatsApp do painel
+ou pelo último comando /escala com mês. Informar o mês numa marcação vale
+somente para aquele pedido e não muda a seleção dos próximos comandos.
+"Este mês" e "mês que vem" usam a data atual. Nome ou número sem ano usa o ano
+do mês selecionado. Para outro ano, informe-o: novembro de 2027 ou 11/2027.
+Envie somente um mês por mensagem. Se ele ainda não foi gerado, o bot avisa
+e não marca em outro mês. A confirmação mostra o mês usado.
+
 
 2. MARCAR OUTRO MILITAR
 -----------------------
@@ -118,7 +135,7 @@ Somente "12h" não define o turno; escreva dia ou noite.
    A mensagem informa o mês, que a marcação iniciou, a coluna e a data.
    A fila vale somente para a data e a coluna informadas. Quando o último militar
    terminar, a marcação fica livre e não continua automaticamente no dia seguinte.
-   Somente administradores do grupo podem iniciar ou reiniciar a fila.
+   Somente administradores selecionados no painel WhatsApp podem iniciar ou reiniciar a fila.
 
    /parar cronograma
    /encerrar cronograma
@@ -128,7 +145,7 @@ Somente "12h" não define o turno; escreva dia ou noite.
    @Escalante marcação livre
    Encerra imediatamente a fila atual e cancela também um início que estiver
    programado. Depois disso, a marcação fica livre para todos os militares ativos
-   e autorizados. Somente administradores do grupo podem encerrar a fila.
+   e autorizados. Somente administradores selecionados no painel WhatsApp podem encerrar a fila.
 
    Também é possível marcar o bot e enviar o cronograma completo no mesmo formato:
 
@@ -285,6 +302,16 @@ Esses comandos alteram somente serviços EXTRAS. Ordinários ficam protegidos.
 COMANDOS ADMINISTRATIVOS E DE GESTÃO
 ====================================
 
+Para autorizar quem abre a escala pelo bot, entre no painel com perfil ADMIN:
+WhatsApp → Administradores da escala no WhatsApp → selecione os responsáveis
+cadastrados no Efetivo e clique em Salvar WhatsApp. Confira o telefone de cada um.
+
+Essa lista controla abrir/fechar colunas, iniciar/reiniciar/encerrar cronograma
+e gerar/confirmar a geração do próximo mês. Ser administrador do grupo não basta.
+Sem nenhum responsável selecionado, esses comandos ficam bloqueados para todos.
+Quem for removido da lista ou tiver o cadastro desativado perde essa permissão.
+Consultar o PDF e fazer marcações continua seguindo as regras normais.
+
 1. ALTERAR A SITUAÇÃO DE UM MILITAR
 -----------------------------------
 
@@ -351,9 +378,31 @@ extras continuam preservados.
    @Escalante escala outubro de 2026
    Troca o mês ativo e envia o PDF correspondente.
 
+   /escala próximo mês
+   /escala mês que vem
+   /escala este mês
+   /escala novembro
+   /escala mês 11
+   /escala 11
+   @Escalante escala novembro de 2027
+   Também selecionam o mês solicitado e enviam seu PDF, se já foi gerado.
+   /escala sem mês usa a seleção atual. Próximo mês é o mês seguinte à data
+   atual, inclusive na virada de dezembro para janeiro.
+
+   /minhas mês 11
+   /vagas novembro
+   Consultam o mês informado sem mudar o mês selecionado.
+
+Na virada do calendário, se a seleção ficou no passado, o WhatsApp avança
+para o mês atual já gerado ou para o próximo disponível. Os seletores do painel
+também avançam ao virar o mês; uma edição em andamento aguarda ser encerrada.
+Isso não gera nem apaga escalas. Você ainda pode selecionar outro mês manualmente.
+
 
 3. GERAR O PRÓXIMO MÊS
 ----------------------
+
+Somente administradores selecionados no painel WhatsApp podem gerar e confirmar.
 
    /gerar-proximo-mes
    @Escalante gerar escala do próximo mês
@@ -369,7 +418,7 @@ começa automaticamente; envie o comando de início com a data e a coluna.
 4. ABRIR A 3ª OU A 4ª COLUNA
 ----------------------------
 
-Somente administradores do grupo podem usar estes comandos.
+Somente administradores selecionados no painel WhatsApp podem usar estes comandos.
 
 Abrir no mês inteiro:
    @Escalante abrir 3ª coluna
@@ -411,7 +460,7 @@ Abrir uma coluna não inicia a fila. Depois, envie o cronograma com data e colun
 5. FECHAR A 3ª OU A 4ª COLUNA
 -----------------------------
 
-Somente administradores do grupo podem usar estes comandos.
+Somente administradores selecionados no painel WhatsApp podem usar estes comandos.
 
 Fechar no mês inteiro:
    @Escalante fechar 4ª coluna

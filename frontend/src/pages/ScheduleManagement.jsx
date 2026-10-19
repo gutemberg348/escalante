@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client.js';
+import { useMonthRollover } from '../hooks/useMonthRollover.js';
 
 const dateLabel = (date) => new Date(`${date}T00:00`).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', weekday: 'short' });
 const periodLabel = (period) => period === 'DIURNO' ? 'Dia · 07h às 19h' : 'Noite · 19h às 07h';
@@ -19,6 +20,10 @@ export default function ScheduleManagement() {
   const { data: me } = useQuery({ queryKey: ['me'], queryFn: () => api.get('/auth/me').then((response) => response.data.user) });
   const { data: competencies = [] } = useQuery({ queryKey: ['competencies'], queryFn: () => api.get('/competencies').then((response) => response.data.items) });
   const generatedCompetencies = useMemo(() => competencies.filter((item) => item.generated_at), [competencies]);
+  useMonthRollover(competencies, competencyId, (id) => {
+    setCompetencyId(id);
+    setSearchParams({ competency_id: id }, { replace: true });
+  }, Boolean(editor || moving));
   const { data: schedule, isLoading } = useQuery({
     queryKey: ['schedule-management', competencyId],
     queryFn: () => api.get('/service-slots/manage', { params: { competency_id: competencyId } }).then((response) => response.data),

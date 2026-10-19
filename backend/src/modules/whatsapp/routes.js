@@ -10,6 +10,7 @@ const settingsSchema = z.object({
   targetNumber: z.string().regex(/^\d{10,15}$/).optional().or(z.literal('')),
   groupJid: z.string().endsWith('@g.us').optional().or(z.literal('')),
   groupJids: z.array(z.string().endsWith('@g.us')).max(20).optional(),
+  adminMemberIds: z.array(z.number().int().positive()).max(100).optional(),
   activeCompetencyId: z.number().int().positive().nullable().optional()
 });
 const automationSchema = z.object({
@@ -26,6 +27,9 @@ router.get('/status', (req, res) => res.json({ item: getWhatsAppStatus() }));
 router.put('/settings', allow('ADMIN'), (req, res, next) => {
   try {
     const input = settingsSchema.parse(req.body);
+    if (input.adminMemberIds?.some((id) => !db.prepare('SELECT id FROM members WHERE id=?').get(id))) {
+      return res.status(400).json({ message: 'Selecione administradores cadastrados no Efetivo.' });
+    }
     if (input.activeCompetencyId && !db.prepare('SELECT id FROM competencies WHERE id=? AND generated_at IS NOT NULL').get(input.activeCompetencyId)) {
       return res.status(400).json({ message: 'Selecione um mês que já foi gerado.' });
     }

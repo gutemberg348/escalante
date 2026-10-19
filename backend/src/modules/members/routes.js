@@ -5,6 +5,7 @@ import { allow } from '../../middlewares/auth.js';
 import { discoverMemberWhatsAppJid } from '../../messaging/whatsapp.js';
 import { applyVacationToCompetency } from '../../scheduling/member-status.js';
 import { regenerateOrdinaryAssignments } from '../../scheduling/monthly.js';
+import { membershipsForMonth, fiveWings } from '../../scheduling/wings.js';
 
 const router = Router();
 const statuses = z.enum(['ACTIVE','VACATION','LEAVE','AWAY','INACTIVE']);
@@ -62,7 +63,7 @@ router.get('/', (req, res, next) => {
   try {
     const competencyId = req.query.competency_id ? z.coerce.number().int().positive().parse(req.query.competency_id) : null;
     if (!competencyId) return res.json({ items: db.prepare(`${base} ORDER BY m.seniority_position IS NULL, m.seniority_position, m.operational_name`).all().map((item) => ({ ...item, monthly_hours: 0, effective_hour_limit: null })) });
-    const competency = db.prepare('SELECT current_hour_limit FROM competencies WHERE id=?').get(competencyId);
+    const competency = db.prepare('SELECT * FROM competencies WHERE id=?').get(competencyId);
     if (!competency) return res.status(404).json({ message: 'Competência não encontrada.' });
     const monthlyHourLimit = Math.min(Number(competency.current_hour_limit || 192), 192);
     const items = db.prepare(`SELECT m.*,w.name AS wing_name,COALESCE(hours.marked_hours,0) AS monthly_hours,
@@ -72,7 +73,12 @@ router.get('/', (req, res, next) => {
         JOIN service_slots s ON s.id=a.service_slot_id WHERE s.competency_id=?
           AND a.status='CONFIRMED' AND a.service_type='EXTRAORDINARY' GROUP BY a.member_id) hours ON hours.member_id=m.id
       ORDER BY m.seniority_position IS NULL,m.seniority_position,m.operational_name`).all(monthlyHourLimit, competencyId);
-    res.json({ items });
+    const memberships = new Map(membershipsForMonth(competency).map((row) => [row.member_id, row]));
+    const wingNames = new Map(fiveWings().map((wing) => [wing.id, wing.name]));
+    res.json({ items: items.map((item) => {
+      const membership = memberships.get(item.id);
+      return membership ? { ...item, wing_name: wingNames.get(membership.wing_id) } : item;
+    }) });
   } catch (error) { next(error); }
 });
 router.get('/:id', (req, res) => {

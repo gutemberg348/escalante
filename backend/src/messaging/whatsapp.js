@@ -1,17 +1,20 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import dayjs from 'dayjs';
 import QRCode from 'qrcode';
 import { env } from '../config/env.js';
 import { audit, db, now } from '../database/index.js';
 import { buildSchedulePdf } from './schedule-pdf.js';
 import { parseMarkingRequest } from './marking-choices.js';
+import { parseRequestedMonth } from './month-selector.js';
 import { applyVacationToCompetency } from '../scheduling/member-status.js';
 import { regenerateOrdinaryAssignments } from '../scheduling/monthly.js';
 export { parseNaturalChoices } from './marking-choices.js';
 
 const authDirectory = path.resolve(path.dirname(env.DATABASE_PATH), 'whatsapp-auth');
-const commandHandlerVersion = 'mentions-v11-service-annotations';
+const commandHandlerVersion = 'mentions-v13-panel-administrators';
+const commandMonthContext = new AsyncLocalStorage();
 const connection = {
   socket: null, saveCreds: null, status: 'DISCONNECTED', qrDataUrl: null, qrIssued: false,
   phoneNumber: null, error: null, reconnectTimer: null, reconnectAttempts: 0,
@@ -28,6 +31,18 @@ const markingWeekdayNames = ['Domingo', 'Segunda-feira', 'Terça-feira', 'Quarta
 // Horário diário em que uma rodada programada do cronograma começa.
 // Altere somente este valor caso a regra deixe de ser 06h.
 const markingRoundStartHour = 6;
+
+function configuredAdministratorMemberIds() {
+  try {
+    const ids = JSON.parse(readSetting('whatsapp_admin_member_ids') || '[]');
+    return Array.isArray(ids) ? [...new Set(ids.filter((id) => Number.isInteger(id) && id > 0))] : [];
+  } catch { return []; }
+}
+
+function isConfiguredAdministrator(member) {
+  return Boolean(member && configuredAdministratorMemberIds().includes(member.id)
+    && db.prepare('SELECT id FROM members WHERE id=? AND active=1').get(member.id));
+}
 
 function configuredGroupJids() {
   const legacyGroup = readSetting('whatsapp_group_jid');
@@ -55,6 +70,7 @@ function publicStatus() {
     configuredNumber: readSetting('whatsapp_target_number'),
     groupJid: configuredGroupJids()[0] ?? '',
     groupJids: configuredGroupJids(),
+    adminMemberIds: configuredAdministratorMemberIds(),
     activeCompetencyId: active?.id ?? null,
     activeCompetencyName: active?.name ?? null
   };
@@ -82,16 +98,18 @@ export function setActiveWhatsAppCompetency(competencyId, userId = null) {
   const competency = db.prepare('SELECT * FROM competencies WHERE id=? AND generated_at IS NOT NULL').get(competencyId);
   if (!competency) throw new Error('Selecione um mês que já foi gerado.');
   writeSetting('bot_active_competency_id', String(competency.id), userId);
+  writeSetting('bot_active_selection_month', dayjs().format('YYYY-MM'), userId);
   return competency;
 }
 
-export function saveWhatsAppSettings({ targetNumber, groupJid, groupJids, activeCompetencyId, userId }) {
+export function saveWhatsAppSettings({ targetNumber, groupJid, groupJids, activeCompetencyId, adminMemberIds, userId }) {
   const normalizedGroups = [...new Set((Array.isArray(groupJids) ? groupJids : [groupJid])
     .filter((jid) => typeof jid === 'string' && jid.endsWith('@g.us')))];
   writeSetting('whatsapp_target_number', targetNumber ?? '', userId);
   // Mantém a chave antiga para instalações já configuradas e grava a lista nova.
   writeSetting('whatsapp_group_jid', normalizedGroups[0] ?? '', userId);
   writeSetting('whatsapp_group_jids', JSON.stringify(normalizedGroups), userId);
+  if (adminMemberIds !== undefined) writeSetting('whatsapp_admin_member_ids', JSON.stringify([...new Set(adminMemberIds)]), userId);
   if (activeCompetencyId) setActiveWhatsAppCompetency(activeCompetencyId, userId);
   return publicStatus();
 }
@@ -747,6 +765,12 @@ function multiTargetSegments(socket, message, body, targets) {
 }
 
 async function assignMultipleMentionedMembers(socket, message, body, targets) {
+  if (!commandMonthContext.getStore()) {
+    const request = resolveRequestedMonth(body);
+    if (request.error) return request.error;
+    if (request.requested) return commandMonthContext.run(request, () =>
+      assignMultipleMentionedMembers(socket, message, request.text, targets));
+  }
   const segments = multiTargetSegments(socket, message, body, targets);
   if (!segments) return 'Não consegui separar o pedido de cada militar. Nenhuma marcação foi feita. Informe o turno logo depois de cada contato marcado.';
 
@@ -807,11 +831,9 @@ export async function handleIncomingMessages(socket, { messages }) {
     const directSelection = parseMarkingRequest(directText);
     const directChoices = directSelection.choices;
     const directTarget = await mentionedMember(socket, message);
-    const columnRequest = parseColumnCommand(directText);
-    const markingScheduleRequest = parseMarkingScheduleCommand(directText);
     const markingSchedulePlan = parseMarkingSchedulePlan(directMultilineText);
     const memberStatusRequest = parseMemberStatusCommand(directText);
-    const groupAdministrator = columnRequest || (markingScheduleRequest && markingScheduleRequest.action !== 'SHOW') || markingSchedulePlan || memberStatusRequest
+    const groupAdministrator = memberStatusRequest
       ? await senderIsGroupAdministrator(socket, message)
       : false;
     const multiTargetRequest = directTarget.targets?.length > 1 && isDelegatedMarkingText(directText);
@@ -853,6 +875,10 @@ export async function handleIncomingMessages(socket, { messages }) {
       rejected: Boolean((!quotedRequest && directTarget.error && !multiTargetRequest && !isAssignmentChangeText(directText)) || quotedTargetMissing) }));
     db.prepare('INSERT OR IGNORE INTO whatsapp_messages (message_id,remote_jid,sender_jid,direction,body,created_at) VALUES (?,?,?,?,?,?)')
       .run(processedMessageId, remoteJid, senderJid, 'INBOUND', effectiveBody.slice(0, 2000), now());
+    // Permission belongs to the actual sender, never to a mentioned/quoted member.
+    const actorIdentity = originalIdentity.member ? originalIdentity : quotedRequest
+      ? await resolveMemberIdentityWithMapping(socket, message.key) : identity;
+    const panelAdministrator = isConfiguredAdministrator(actorIdentity.member);
     const reply = identity.member
       ? isAssignmentChangeText(directText)
         ? await changeExtraAssignment(socket, message, body, directText,
@@ -868,6 +894,7 @@ export async function handleIncomingMessages(socket, { messages }) {
           targetMember,
           requiresTarget: !quotedRequest && (directTarget.required || Boolean(quotedTargetIdentity)),
           groupAdministrator,
+          panelAdministrator,
           groupJid: remoteJid
         })
       : quotedRequest
@@ -1052,19 +1079,24 @@ Exemplos de dias e turnos:
 Também aceita vírgula: *dia 20, dia*.
 *12h* sozinho não define o turno: informe dia ou noite.
 Também entende a data atual: *12h dia hoje* ou *hoje à noite*.
+Para escolher o mês: */marcar dia 20 noite no mês que vem*, *dia 20 em novembro* ou *dia 20 noite no mês 11*.
+Sem mês, usa a seleção do WhatsApp. Um mês na marcação vale somente para aquele pedido.
 
 Outros atalhos:
 */status* - consulta seu cadastro
 */minhas* - suas marcações
 */horas @pessoa* - horas e horários confirmados de um militar
 */cronograma* - mostra a ordem e o horário limite de cada militar
-*@Escalante iniciar cronograma dia 25/09/2026 2ª coluna* - programa a fila (somente administrador do grupo)
-*/parar cronograma* - encerra a fila e deixa a marcação livre (somente administrador do grupo)
+*@Escalante iniciar cronograma dia 25/09/2026 2ª coluna* - programa a fila (administrador configurado no painel WhatsApp)
+*/parar cronograma* - encerra a fila e deixa a marcação livre (administrador configurado no painel WhatsApp)
 */escala* - recebe a escala em PDF
 */meses* - mostra os meses gerados e qual está ativo
 */escala 10/2026* - troca o mês ativo e envia o novo PDF
-*/gerar-proximo-mes* - mostra o aviso antes de gerar
-*/confirmar-gerar-proximo-mes* - confirma a geração e publica o PDF
+*/escala próximo mês*, */escala este mês*, */escala novembro* ou */escala 11* - selecionam um mês já gerado
+*/minhas mês 11* e */vagas novembro* - consultam o mês informado
+"Próximo mês" segue a data atual; mês sem ano usa o ano selecionado. Na virada do mês, uma seleção antiga avança automaticamente.
+*/gerar-proximo-mes* - mostra o aviso antes de gerar (administrador configurado no painel WhatsApp)
+*/confirmar-gerar-proximo-mes* - confirma a geração e publica o PDF (administrador configurado no painel WhatsApp)
 */cancelar 125* - cancela uma marcação
 */passo a vez* - não marca nesta rodada
 
@@ -1074,6 +1106,8 @@ Comandos para administradores do grupo:
 *@Escalante voltar @militar das férias* - também volta para ativo
 Férias retiram somente os ordinários; os extras são mantidos e continuam liberados.
 Também aceita *licença*, *afastado* e *desativado*.
+
+Colunas: somente administradores selecionados no painel → WhatsApp → Administradores da escala no WhatsApp.
 *@Escalante abrir 3ª coluna* - abre no mês inteiro
 *@Escalante abrir 4ª coluna dia 17* - abre somente nessa data
 *@Escalante abrir 4ª coluna exceto dias 17 e 18* - abre nos demais dias
@@ -1086,29 +1120,17 @@ Envie */comandos* ou apenas *comandos* para ver esta lista.`;
 const commandMonthNames = ['JANEIRO', 'FEVEREIRO', 'MARCO', 'ABRIL', 'MAIO', 'JUNHO', 'JULHO', 'AGOSTO', 'SETEMBRO', 'OUTUBRO', 'NOVEMBRO', 'DEZEMBRO'];
 
 function findGeneratedCompetency(selector) {
-  const normalized = selector.trim().toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-  const competencies = db.prepare('SELECT * FROM competencies WHERE generated_at IS NOT NULL ORDER BY year,month').all();
-  if (/PROXIM[OA]/.test(normalized)) {
-    const active = activeCompetency();
-    const activeIndex = active ? active.year * 12 + active.month : dayjs().year() * 12 + dayjs().month() + 1;
-    return competencies.find((item) => item.year * 12 + item.month > activeIndex) ?? null;
-  }
-  let month = null;
-  let year = null;
-  const numeric = normalized.match(/\b(0?[1-9]|1[0-2])\s*[\/-]\s*(20\d{2})\b/);
-  const iso = normalized.match(/\b(20\d{2})\s*-\s*(0?[1-9]|1[0-2])\b/);
-  if (numeric) { month = Number(numeric[1]); year = Number(numeric[2]); }
-  else if (iso) { year = Number(iso[1]); month = Number(iso[2]); }
-  else {
-    month = commandMonthNames.findIndex((name) => normalized.includes(name)) + 1 || null;
-    year = Number(normalized.match(/\b20\d{2}\b/)?.[0]) || null;
-  }
-  if (!month) return null;
-  if (year) return competencies.find((item) => item.year === year && item.month === month) ?? null;
-  const currentIndex = dayjs().year() * 12 + dayjs().month() + 1;
-  return competencies.find((item) => item.month === month && item.year * 12 + item.month >= currentIndex)
-    ?? [...competencies].reverse().find((item) => item.month === month)
-    ?? null;
+  return resolveRequestedMonth(selector, true).competency ?? null;
+}
+
+function resolveRequestedMonth(text, selectorOnly = false) {
+  const selected = activeCompetency();
+  const request = parseRequestedMonth(text, { defaultYear: selected?.year ?? dayjs().year(), selectorOnly });
+  if (request.error || !request.requested) return request;
+  const competency = db.prepare('SELECT * FROM competencies WHERE year=? AND month=? AND generated_at IS NOT NULL')
+    .get(request.year, request.month);
+  if (!competency) return { error: `A escala de ${String(request.month).padStart(2, '0')}/${request.year} ainda não foi gerada. Nenhuma alteração foi feita. Consulte */meses*.` };
+  return { ...request, competency, selectedCompetencyId: selected?.id };
 }
 
 function generatedCompetenciesMessage() {
@@ -1230,7 +1252,7 @@ async function saveAndStartMarkingSchedulePlan(plan, requestedBy) {
   return `*CRONOGRAMA INICIADO*\n${competency.name} — ${plan.column}ª coluna.`;
 }
 
-async function executeCommand(member, rawBody, { explicitSlash = false, targetMember = null, requiresTarget = false, groupAdministrator = false, groupJid = null } = {}) {
+async function executeCommand(member, rawBody, { explicitSlash = false, targetMember = null, requiresTarget = false, groupAdministrator = false, panelAdministrator = false, groupJid = null } = {}) {
   if (requiresTarget && !targetMember) return 'Não identifiquei o militar marcado. Nenhuma marcação foi feita.';
   const commandBody = rawBody.trim().replace(/^\/+/, '').trim();
   const decoratedRequest = extractDisplayPrefix(commandBody);
@@ -1239,15 +1261,17 @@ async function executeCommand(member, rawBody, { explicitSlash = false, targetMe
   const [command, argument] = normalized.split(/\s+/, 2);
   if (['MENU', 'AJUDA', 'COMANDOS'].includes(command)) return commandMenu();
   if (command === 'MESES') return generatedCompetenciesMessage();
+  const competencySwitch = normalized.match(/^(?:ESCALA|MES|USAR[-\s]+ESCALA|ATIVAR[-\s]+ESCALA)\s+(.+)$/);
+  if (competencySwitch && !targetMember) return activateCompetencyFromGroup(competencySwitch[1], member);
   const parseSelection = parseActiveMarkingRequest;
   const columnRequest = parseColumnCommand(commandBody);
   if (columnRequest) {
-    if (!groupAdministrator) return 'Somente administradores do grupo podem abrir ou fechar colunas.';
+    if (!panelAdministrator) return 'Somente administradores configurados no painel WhatsApp podem abrir ou fechar colunas.';
     return applyColumnCommand(columnRequest, member);
   }
   const markingSchedulePlan = parseMarkingSchedulePlan(rawBody);
   if (markingSchedulePlan) {
-    if (!groupAdministrator) return 'Somente administradores do grupo podem preencher horários e iniciar a fila pelo cronograma.';
+    if (!panelAdministrator) return 'Somente administradores configurados no painel WhatsApp podem preencher horários e iniciar a fila pelo cronograma.';
     return saveAndStartMarkingSchedulePlan(markingSchedulePlan, member);
   }
   const memberStatusRequest = parseMemberStatusCommand(commandBody);
@@ -1255,6 +1279,14 @@ async function executeCommand(member, rawBody, { explicitSlash = false, targetMe
     if (!groupAdministrator) return 'Somente administradores do grupo podem alterar a situação de um militar.';
     if (!targetMember || !requiresTarget) return 'Marque um militar. Exemplo: *@Escalante coloque @militar de férias*.';
     return changeMemberOperationalStatus(targetMember, memberStatusRequest.status, member, groupJid);
+  }
+  if (!commandMonthContext.getStore() && !parseMarkingScheduleCommand(commandBody)
+    && !/^(?:GERAR|CONFIRMAR|CANCELAR|STATUS|PASSO|PASSAR)\b|^CRIAR\s+(?:(?:A|O)\s+)?(?:LISTA|ESCALA)\b/.test(normalized)) {
+    const request = resolveRequestedMonth(commandBody);
+    if (request.error) return request.error;
+    if (request.requested) return commandMonthContext.run(request, () => executeCommand(member, request.text, {
+      explicitSlash, targetMember, requiresTarget, groupAdministrator, panelAdministrator, groupJid
+    }));
   }
   const isPermutaNote = ['PERMUTA', 'PERMUTAR', 'PERMUTE'].includes(command);
   const isCertificateNote = command === 'ATESTADO';
@@ -1318,16 +1350,18 @@ async function executeCommand(member, rawBody, { explicitSlash = false, targetMe
       ? { ...result, text: `${heading}\n\n${result.text}` }
       : `${heading}\n\n${result}`;
   }
-  const competencySwitch = normalized.match(/^(?:ESCALA|MES|USAR[-\s]+ESCALA|ATIVAR[-\s]+ESCALA)\s+(.+)$/);
-  if (competencySwitch) return activateCompetencyFromGroup(competencySwitch[1], member);
-  if (command === 'CONFIRMAR-GERAR-PROXIMO-MES') return generateNextMonthFromGroup();
+  if (command === 'CONFIRMAR-GERAR-PROXIMO-MES') {
+    if (!panelAdministrator) return 'Somente administradores configurados no painel WhatsApp podem gerar a escala.';
+    return generateNextMonthFromGroup();
+  }
   if (command === 'GERAR-PROXIMO-MES' || /^(?:GERAR|CRIAR)\s+(?:(?:A|O)\s+)?(?:LISTA|ESCALA)(?:\s+DO)?\s+PROXIMO\s+MES$/.test(normalized)) {
+    if (!panelAdministrator) return 'Somente administradores configurados no painel WhatsApp podem gerar a escala.';
     return nextMonthGenerationWarning();
   }
   if (command === 'STATUS' || /\bMEU STATUS\b/.test(normalized)) return `*${member.rank} ${member.operational_name}*\nSituação: ${operationalLabel[member.operational_status] ?? member.operational_status}\nAutorização: ${authorizationLabel[member.authorization_status] ?? member.authorization_status}`;
   const markingScheduleRequest = parseMarkingScheduleCommand(normalized);
   if (markingScheduleRequest?.action === 'STOP') {
-    if (!groupAdministrator) return 'Somente administradores do grupo podem encerrar a fila do cronograma.';
+    if (!panelAdministrator) return 'Somente administradores configurados no painel WhatsApp podem encerrar a fila do cronograma.';
     const stamp = now();
     const activeTurns = db.prepare('SELECT COUNT(*) total FROM marking_turns WHERE active=1').get().total;
     const scheduledStart = readSetting('bot_marking_round_starts_at');
@@ -1343,7 +1377,7 @@ async function executeCommand(member, rawBody, { explicitSlash = false, targetMe
     return '*CRONOGRAMA ENCERRADO*\n\nA fila foi encerrada. A marcação agora está livre para os militares autorizados, inclusive quem está de férias.';
   }
   if (markingScheduleRequest?.action === 'START') {
-    if (!groupAdministrator) return 'Somente administradores do grupo podem iniciar ou reiniciar a fila do cronograma.';
+    if (!panelAdministrator) return 'Somente administradores configurados no painel WhatsApp podem iniciar ou reiniciar a fila do cronograma.';
     const competency = activeCompetency();
     if (!competency) return 'Não há mês ativo para iniciar o cronograma.';
     const details = parseMarkingScheduleStartDetails(commandBody, competency);
@@ -1400,18 +1434,20 @@ async function executeCommand(member, rawBody, { explicitSlash = false, targetMe
 }
 
 export function activeCompetency() {
+  const requested = commandMonthContext.getStore()?.competency;
+  if (requested) return requested;
   const currentIndex = dayjs().year() * 12 + dayjs().month() + 1;
   const configuredId = Number(readSetting('bot_active_competency_id'));
   let configured = null;
   if (Number.isInteger(configuredId) && configuredId > 0) {
     configured = db.prepare('SELECT * FROM competencies WHERE id=? AND generated_at IS NOT NULL').get(configuredId) ?? null;
     const configuredIndex = configured ? configured.year * 12 + configured.month : 0;
-    if (configured && configuredIndex >= currentIndex) return configured;
+    if (configured && (configuredIndex >= currentIndex || readSetting('bot_active_selection_month') === dayjs().format('YYYY-MM'))) return configured;
   }
   const automatic = db.prepare(`SELECT * FROM competencies WHERE generated_at IS NOT NULL
     AND (year * 12 + month)>=? ORDER BY year,month LIMIT 1`).get(currentIndex) ?? null;
   if (automatic) {
-    if (automatic.id !== configuredId) writeSetting('bot_active_competency_id', String(automatic.id), null);
+    if (automatic.id !== configuredId) setActiveWhatsAppCompetency(automatic.id);
     return automatic;
   }
   return configured ?? db.prepare(`SELECT * FROM competencies WHERE generated_at IS NOT NULL ORDER BY year DESC,month DESC LIMIT 1`).get() ?? null;
@@ -1531,6 +1567,8 @@ function advanceMarkingTurn(expectedMemberId) {
 }
 
 async function resultWithNextTurn(member, text, reason = 'MARKED') {
+  const request = commandMonthContext.getStore();
+  if (request && request.competency.id !== request.selectedCompetencyId) return text;
   const change = advanceMarkingTurn(member.id);
   const announcement = await turnAnnouncement(change, reason);
   if (!announcement) return text;
@@ -1925,6 +1963,12 @@ Somente os dois serviços extras informados foram trocados.`;
 }
 
 async function changeExtraAssignment(socket, message, body, directText, targets, requestedBy) {
+  if (!commandMonthContext.getStore()) {
+    const request = resolveRequestedMonth(body);
+    if (request.error) return request.error;
+    if (request.requested) return commandMonthContext.run(request, () =>
+      changeExtraAssignment(socket, message, request.text, withoutBotMention(request.text), targets, requestedBy));
+  }
   if (!activeCompetency()) return 'Não há competência ativa para realizar a alteração.';
   const normalized = normalizeMentionLabel(directText);
   const isRemaneuver = remaneuverPattern.test(normalized);
@@ -2052,7 +2096,8 @@ async function assignNaturalChoices(member, choices, { displayPrefix = null } = 
       responses.push(result.startsWith('Marcação confirmada') ? `${label}: confirmado.` : `${label}: ${result}`);
     }
   }
-  const message = `*RESULTADO DA MARCAÇÃO*\n\n${responses.join('\n')}\n\nResponda *minhas marcações* para conferir ou use /escala para receber o PDF.`;
+  const monthSelector = `${String(competency.month).padStart(2, '0')}/${competency.year}`;
+  const message = `*RESULTADO DA MARCAÇÃO*\n*Mês: ${competency.name}*\n\n${responses.join('\n')}\n\nUse */minhas ${monthSelector}* para conferir ou */escala ${monthSelector}* para receber o PDF.`;
   return confirmed ? await resultWithNextTurn(member, message) : message;
 }
 

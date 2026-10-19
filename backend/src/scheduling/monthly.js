@@ -1,6 +1,7 @@
 import dayjs from 'dayjs';
 import { db, audit, now } from '../database/index.js';
 import { isMajoradoDate } from './majorado.js';
+import { wingAnchorsForMonth, cycleRuleForMonth, fiveWings, wingDays, membershipsForMonth } from './wings.js';
 
 const monthNames = [
   'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
@@ -50,15 +51,19 @@ function eligibleForOrdinary(member) {
     && Number(member.ordinary_eligible) === 1;
 }
 
-export function generateOrdinaryAssignments({ competencyId, userId = null, reason = 'Geração mensal da escala ordinária 1x4' }) {
+export function generateOrdinaryAssignments({ competencyId, userId = null, reason = 'Geração mensal da escala ordinária 1x4', memberIds = null, fromDate = null }) {
   const competency = db.prepare('SELECT * FROM competencies WHERE id=?').get(competencyId);
   if (!competency) throw new Error('Mês não encontrado para gerar a escala ordinária.');
   const targetStart = dayjs(`${competency.year}-${String(competency.month).padStart(2, '0')}-01`);
   const targetEnd = targetStart.endOf('month');
-  const anchors = db.prepare(`SELECT member_id,position_number,anchor_date AS last_service_date
+  const legacyAnchors = db.prepare(`SELECT member_id,position_number,anchor_date AS last_service_date
     FROM ordinary_rotations WHERE active=1 AND anchor_date<?
     ORDER BY position_number,anchor_date,member_id`).all(targetStart.format('YYYY-MM-DD'));
-  const slots = db.prepare(`SELECT id,service_date,period,starts_at,ends_at,current_capacity
+  const wingAnchors = wingAnchorsForMonth(competency);
+  const managedIds = new Set(wingAnchors.map((anchor) => anchor.member_id));
+  const anchors = [...legacyAnchors.filter((anchor) => !managedIds.has(anchor.member_id)), ...wingAnchors]
+    .filter((anchor) => !memberIds || memberIds.includes(anchor.member_id));
+  const slots = db.prepare(`SELECT id,service_date,period,starts_at,ends_at,current_capacity,status,homologated_at
     FROM service_slots WHERE competency_id=? ORDER BY service_date,period`).all(competency.id);
   const slotsByDate = new Map();
   for (const slot of slots) {
@@ -75,7 +80,6 @@ export function generateOrdinaryAssignments({ competencyId, userId = null, reaso
   const insertAssignment = db.prepare(`INSERT INTO assignments
     (service_slot_id,position_number,member_id,service_type,status,protocol,confirmed_at,created_at,updated_at)
     VALUES (?,?,?,'ORDINARY','CONFIRMED',?,?,?,?)`);
-  const setOrdinary = db.prepare(`UPDATE assignments SET service_type='ORDINARY',updated_at=? WHERE id=?`);
   const skippedMembers = [];
   const unavailableDays = [];
   const conflictDays = [];
@@ -101,10 +105,15 @@ export function generateOrdinaryAssignments({ competencyId, userId = null, reaso
       while (serviceDate.isBefore(targetStart, 'day')) serviceDate = serviceDate.add(5, 'day');
       for (; !serviceDate.isAfter(targetEnd, 'day'); serviceDate = serviceDate.add(5, 'day')) {
         const dateKey = serviceDate.format('YYYY-MM-DD');
+        if (fromDate && dateKey < fromDate) continue;
+        if (anchor.from_date && dateKey < anchor.from_date) continue;
+        if (anchor.until_date && dateKey > anchor.until_date) continue;
         const daySlots = slotsByDate.get(dateKey) ?? [];
         const daySlot = daySlots.find((slot) => slot.period === 'DIURNO');
         const nightSlot = daySlots.find((slot) => slot.period === 'NOTURNO');
-        if (!daySlot || !nightSlot || anchor.position_number > Math.min(daySlot.current_capacity, nightSlot.current_capacity)) {
+        if (!daySlot || !nightSlot || daySlot.status !== 'OPEN' || nightSlot.status !== 'OPEN'
+            || daySlot.homologated_at || nightSlot.homologated_at
+            || anchor.position_number > Math.min(daySlot.current_capacity, nightSlot.current_capacity)) {
           conflictDays.push({ memberId: member.id, serviceDate: dateKey, position: anchor.position_number, reason: 'Horários ou posição indisponíveis' });
           continue;
         }
@@ -116,7 +125,7 @@ export function generateOrdinaryAssignments({ competencyId, userId = null, reaso
         const blocked = existingBySlot.some(({ assignments }) => {
           const occupant = assignments.find((item) => item.position_number === anchor.position_number);
           const sameMemberElsewhere = assignments.find((item) => item.member_id === member.id && item.position_number !== anchor.position_number);
-          return Boolean((occupant && occupant.member_id !== member.id) || sameMemberElsewhere);
+          return Boolean((occupant && (occupant.member_id !== member.id || occupant.service_type !== 'ORDINARY')) || sameMemberElsewhere);
         });
         if (blocked) {
           conflictDays.push({ memberId: member.id, serviceDate: dateKey, position: anchor.position_number, reason: 'Vaga já ocupada' });
@@ -126,10 +135,6 @@ export function generateOrdinaryAssignments({ competencyId, userId = null, reaso
         for (const { slot, assignments } of existingBySlot) {
           const existingAssignment = assignments.find((item) => item.position_number === anchor.position_number);
           if (existingAssignment) {
-            if (existingAssignment.service_type !== 'ORDINARY') {
-              setOrdinary.run(now(), existingAssignment.id);
-              assignmentsReclassified += 1;
-            }
             continue;
           }
           const stamp = now();
@@ -173,13 +178,58 @@ export function regenerateOrdinaryAssignments({ competencyId, userId = null, rea
   if (!competency) throw new Error('Mês não encontrado para regenerar a escala ordinária.');
   const ordinaryAssignments = db.prepare(`SELECT a.* FROM assignments a JOIN service_slots s ON s.id=a.service_slot_id
     WHERE s.competency_id=? AND a.status='CONFIRMED' AND a.service_type='ORDINARY'`).all(competencyId);
-  const removed = db.transaction(() => {
+  const locked = db.prepare(`SELECT COUNT(*) total FROM service_slots s JOIN assignments a ON a.service_slot_id=s.id
+    WHERE s.competency_id=? AND a.status='CONFIRMED' AND a.service_type='ORDINARY'
+      AND (s.status<>'OPEN' OR s.homologated_at IS NOT NULL)`).get(competencyId).total;
+  if (locked) throw Object.assign(new Error('Este mês possui serviços ordinários fechados ou homologados. Revise esses serviços antes de regerar.'), { status: 409 });
+  return db.transaction(() => {
     const remove = db.prepare('DELETE FROM assignments WHERE id=?');
     for (const assignment of ordinaryAssignments) remove.run(assignment.id);
-    return ordinaryAssignments.length;
+    if (ordinaryAssignments.length) audit({ userId, action: 'RESET_ORDINARY_SCHEDULE', entityType: 'COMPETENCY', entityId: competencyId, before: { assignments: ordinaryAssignments }, reason });
+    return { ...generateOrdinaryAssignments({ competencyId, userId, reason }), assignmentsRemoved: ordinaryAssignments.length };
   })();
-  if (removed) audit({ userId, action: 'RESET_ORDINARY_SCHEDULE', entityType: 'COMPETENCY', entityId: competencyId, before: { assignments: ordinaryAssignments }, reason });
-  return { ...generateOrdinaryAssignments({ competencyId, userId, reason }), assignmentsRemoved: removed };
+}
+
+export function previewMonthGeneration({ year, month }) {
+  const start = `${year}-${String(month).padStart(2, '0')}-01`;
+  const existing = db.prepare('SELECT * FROM competencies WHERE year=? AND month=?').get(year, month);
+  const competency = existing ?? { id: -1, year, month, name: `${monthNames[month - 1]} de ${year}` };
+  const totals = db.prepare(`SELECT
+      COUNT(CASE WHEN a.service_type='ORDINARY' THEN 1 END) ordinaryAssignments,
+      COUNT(DISTINCT CASE WHEN a.service_type='ORDINARY' THEN s.service_date || ':' || a.member_id END) ordinaryDutyDays,
+      COUNT(CASE WHEN a.service_type='EXTRAORDINARY' THEN 1 END) extraordinaryAssignments,
+      COUNT(CASE WHEN a.service_type='ORDINARY' AND TRIM(COALESCE(a.display_prefix,''))<>'' THEN 1 END) annotatedOrdinaryAssignments,
+      COUNT(CASE WHEN a.service_type='ORDINARY' AND (s.status<>'OPEN' OR s.homologated_at IS NOT NULL) THEN 1 END) lockedOrdinaryAssignments
+    FROM service_slots s JOIN assignments a ON a.service_slot_id=s.id AND a.status='CONFIRMED'
+    WHERE s.competency_id=?`).get(competency.id);
+  const rule = cycleRuleForMonth(start);
+  const memberships = membershipsForMonth(competency);
+  const action = existing?.generated_at || totals.ordinaryAssignments ? 'REGENERATE' : 'GENERATE';
+  return { competency: { id: existing?.id ?? null, year, month, name: competency.name }, action,
+    ...totals, expectedDays: dayjs(start).daysInMonth(),
+    rule: { mode: rule ? 'CONTINUOUS' : 'LEGACY', label: rule ? 'Ciclo 1x4 contínuo, sem reiniciar no dia 1'
+      : 'Ciclo ordinário 1x4 anterior', effectiveMonth: rule?.effective_month ?? null },
+    wings: rule ? fiveWings().map((wing) => ({ number: wing.number, name: wing.name,
+      days: wingDays(competency, wing.number, rule).map((date) => Number(date.slice(-2))),
+      members: memberships.filter((row) => row.wing_id === wing.id).length })) : [],
+    temporaryChanges: memberships.filter((row) => row.temporary).length,
+    canGenerate: totals.lockedOrdinaryAssignments === 0 };
+}
+
+export function generateSelectedMonthSchedule({ year, month, confirmOrdinaryReset = false, userId = null }) {
+  const preview = previewMonthGeneration({ year, month });
+  if (preview.action === 'REGENERATE' && !confirmOrdinaryReset) {
+    throw Object.assign(new Error('Confirme a substituição dos serviços ordinários do mês escolhido antes de regerar.'), { status: 409 });
+  }
+  if (!preview.canGenerate) throw Object.assign(new Error('O mês escolhido possui serviços ordinários fechados ou homologados. Revise esses serviços antes de regerar.'), { status: 409 });
+  return db.transaction(() => {
+    const prepared = ensureCompetencySchedule(`${year}-${String(month).padStart(2, '0')}-01`);
+    const reason = `${preview.action === 'REGENERATE' ? 'Regeneração' : 'Geração'} do mês escolhido no painel`;
+    const generation = preview.action === 'REGENERATE'
+      ? regenerateOrdinaryAssignments({ competencyId: prepared.competency.id, userId, reason })
+      : generateOrdinaryAssignments({ competencyId: prepared.competency.id, userId, reason });
+    return { ...generation, competencyCreated: prepared.competencyCreated, action: preview.action, rule: preview.rule };
+  })();
 }
 
 export function generateNextMonthSchedule({ userId = null, reason } = {}) {
