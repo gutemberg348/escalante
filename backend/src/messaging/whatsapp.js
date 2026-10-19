@@ -9,7 +9,7 @@ import { buildSchedulePdf } from './schedule-pdf.js';
 import { parseMarkingRequest } from './marking-choices.js';
 import { parseRequestedMonth } from './month-selector.js';
 import { applyVacationToCompetency } from '../scheduling/member-status.js';
-import { regenerateOrdinaryAssignments } from '../scheduling/monthly.js';
+import { regenerateOrdinaryAssignments, previewMonthGeneration } from '../scheduling/monthly.js';
 export { parseNaturalChoices } from './marking-choices.js';
 
 const authDirectory = path.resolve(path.dirname(env.DATABASE_PATH), 'whatsapp-auth');
@@ -915,7 +915,7 @@ export async function handleIncomingMessages(socket, { messages }) {
       if (reply.monthGenerationRequest && sent?.key?.id) {
         const request = reply.monthGenerationRequest;
         writeSetting(monthGenerationKey(remoteJid, request.memberId), JSON.stringify({
-          target: request.target, promptId: sent.key.id, expiresAt: Date.now() + 5 * 60 * 1000
+          target: request.target, action: request.action, promptId: sent.key.id, expiresAt: Date.now() + 5 * 60 * 1000
         }), null);
       }
       if (reply.pdf) {
@@ -1170,24 +1170,25 @@ async function activateCompetencyFromGroup(selector, member) {
 }
 
 let monthGenerationRunning = false;
-async function generateNextMonthFromGroup(expectedTarget) {
+async function generateNextMonthFromGroup(expectedTarget, expectedAction) {
   const { sendMonthlyOpening } = await import('./automation.js');
   if (monthGenerationRunning) return 'Já existe uma geração em andamento. Aguarde o PDF antes de fazer outro pedido.';
-  if (nextMonthGenerationTarget().format('YYYY-MM') !== expectedTarget) return 'O próximo mês disponível mudou. Peça para gerar novamente e confira o mês antes de responder SIM.';
+  const target = nextMonthGenerationTarget();
+  if (target.format('YYYY-MM') !== expectedTarget) return 'O próximo mês mudou. Peça para gerar novamente.';
+  const preview = previewMonthGeneration({ year: target.year(), month: target.month() + 1 });
+  if (preview.action !== expectedAction) return 'A escala mudou desde a pergunta. Peça para gerar novamente.';
   monthGenerationRunning = true;
   let result;
-  try { result = await sendMonthlyOpening({ force: true, advance: true }); }
+  try { result = await sendMonthlyOpening({ force: true, advance: true, confirmOrdinaryReset: expectedAction === 'REGENERATE' }); }
   finally { monthGenerationRunning = false; }
   if (!result.sent) return result.reason || 'Não foi possível gerar o próximo mês.';
   const generation = result.generation;
-  return `*PRÓXIMO MÊS GERADO*\n\n*${result.competency.name}*\n${generation.ordinaryDutyDays} serviços ordinários programados no ciclo 1x4.\n${generation.assignmentsCreated} turnos ordinários novos.\n${generation.skippedMembers.length} integrantes ignorados por situação ou autorização.\n${generation.unavailableDays.length} serviços não preenchidos por indisponibilidade.\n${generation.conflictDays.length} conflitos para revisão no painel.\n\nO PDF foi publicado no grupo. As marcações restantes serão extras.`;
+  return `Escala de *${result.competency.name}* ${generation.action === 'REGENERATE' ? 'regerada' : 'gerada'}. PDF enviado.`
+    + (generation.conflictDays.length ? ` ${generation.conflictDays.length} conflito(s) para revisão no painel.` : '');
 }
 
 function nextMonthGenerationTarget() {
-  const latest = db.prepare('SELECT year,month FROM competencies WHERE generated_at IS NOT NULL ORDER BY year DESC,month DESC LIMIT 1').get();
-  const current = dayjs().startOf('month');
-  const latestDate = latest ? dayjs(`${latest.year}-${String(latest.month).padStart(2, '0')}-01`) : current;
-  return (latestDate.isAfter(current, 'month') ? latestDate : current).add(1, 'month');
+  return dayjs().startOf('month').add(1, 'month');
 }
 
 const monthGenerationKey = (groupJid, memberId) => `bot_pending_month_generation:${groupJid}:${memberId}`;
@@ -1216,8 +1217,9 @@ async function handleMonthGenerationAnswer(socket, message, body, originalIdenti
   if (!isConfiguredAdministrator(identity.member)) return { handled: true, text: 'Somente administradores configurados no painel WhatsApp podem gerar a escala.' };
   if (!Number.isFinite(pending.expiresAt) || Date.now() > pending.expiresAt) return { handled: true, text: 'Essa pergunta expirou. Peça para gerar a escala novamente.' };
   if (!yes) return { handled: true, text: 'Geração cancelada. Nenhuma escala foi alterada.' };
-  try { return { handled: true, text: await generateNextMonthFromGroup(pending.target) }; }
+  try { return { handled: true, text: await generateNextMonthFromGroup(pending.target, pending.action) }; }
   catch (error) {
+    if (error.status) return { handled: true, text: error.message };
     console.error('Falha ao gerar/publicar o próximo mês:', error);
     return { handled: true, text: 'Não consegui concluir a geração ou o envio do PDF. Confira /meses e /escala antes de pedir outra geração.' };
   }
@@ -1226,8 +1228,12 @@ async function handleMonthGenerationAnswer(socket, message, body, originalIdenti
 function nextMonthGenerationWarning(memberId) {
   const target = nextMonthGenerationTarget();
   const monthName = commandMonthNames[target.month()];
-  return { type: 'TEXT', text: `*GERAR ESCALA*\n\nPosso gerar a escala de *${monthName} de ${target.year()}* e enviar o PDF?\n\nO mês atual será preservado. O novo mês ficará selecionado no WhatsApp.\n\nResponda *SIM* para gerar ou *NÃO* para cancelar. Essa pergunta vale por 5 minutos.`,
-    monthGenerationRequest: { memberId, target: target.format('YYYY-MM') } };
+  const preview = previewMonthGeneration({ year: target.year(), month: target.month() + 1 });
+  if (!preview.canGenerate) return 'Essa escala possui ordinários fechados ou homologados. Revise-os no painel antes de regerar.';
+  return { type: 'TEXT', text: preview.action === 'REGENERATE'
+    ? `A escala de *${monthName} de ${target.year()}* já existe. Regerar os ordinários e enviar o PDF? Extras mantidos.\n*SIM* ou *NÃO*.`
+    : `Posso gerar a escala de *${monthName} de ${target.year()}* e enviar o PDF?\n*SIM* ou *NÃO*.`,
+    monthGenerationRequest: { memberId, target: target.format('YYYY-MM'), action: preview.action } };
 }
 
 const normalizeRosterLabel = (value) => normalizeMentionLabel(value).replace(/[^A-Z0-9]+/g, ' ').trim();

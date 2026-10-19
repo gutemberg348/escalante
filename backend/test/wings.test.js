@@ -13,7 +13,7 @@ process.env.ADMIN_EMAIL = 'wings-test@example.com';
 process.env.ADMIN_INITIAL_PASSWORD = 'isolated-wings-password';
 const { db, now } = await import('../src/database/index.js');
 const { runMigrations } = await import('../src/database/migrations.js');
-const { ensureCompetencySchedule, generateOrdinaryAssignments, regenerateOrdinaryAssignments, generateSelectedMonthSchedule } = await import('../src/scheduling/monthly.js');
+const { ensureCompetencySchedule, generateOrdinaryAssignments, regenerateOrdinaryAssignments, generateSelectedMonthSchedule, generateNextMonthSchedule } = await import('../src/scheduling/monthly.js');
 const { fiveWings, wingDays, cycleRuleForMonth, previewWingImport, membershipsForMonth } = await import('../src/scheduling/wings.js');
 const { default: routes } = await import('../src/modules/wings/routes.js');
 const { default: competencyRoutes } = await import('../src/modules/competencies/routes.js');
@@ -522,6 +522,33 @@ test('month generation rejects invalid months and read-only mutations', async ()
   assert.equal((await requestMonth('/generation-preview?year=2031&month=13', null, 'GET')).status, 400);
   assert.equal((await requestMonth('/generate-month', { year: 2031, month: 0 })).status, 400);
   assert.equal((await requestMonth('/generate-month', { year: 2031, month: 9 }, 'POST', 'SYSTEM_OPERATOR')).status, 403);
+});
+
+test('next month targets the calendar month and regenerates it only after confirmation', async () => {
+  await importRoster();
+  const december = generateSelectedMonthSchedule({ year: 2042, month: 12, userId: 1 });
+  const decemberBefore = db.prepare(`SELECT a.* FROM assignments a JOIN service_slots s ON s.id=a.service_slot_id WHERE s.competency_id=? ORDER BY a.id`).all(december.competency.id);
+  const generation = generateNextMonthSchedule({ referenceDate: '2042-10-19', userId: 1 });
+  assert.equal(generation.competency.month, 11);
+  assert.equal(generation.competency.year, 2042);
+  assert.equal(generation.action, 'GENERATE');
+  const slot = db.prepare("SELECT id FROM service_slots WHERE competency_id=? AND service_date='2042-11-01' AND period='DIURNO'").get(generation.competency.id);
+  db.prepare("UPDATE service_slots SET current_capacity=4 WHERE id=?").run(slot.id);
+  db.prepare(`INSERT INTO schedule_pdf_column_releases (competency_id,service_date,third_column_open,fourth_column_open,updated_by,updated_at)
+    VALUES (?,'2042-11-01',1,1,1,?)`).run(generation.competency.id, stamp);
+  db.prepare(`INSERT INTO assignments (service_slot_id,position_number,member_id,service_type,status,protocol,confirmed_at,created_at,updated_at)
+    VALUES (?,4,6,'EXTRAORDINARY','CONFIRMED','keep-next-month-extra',?,?,?)`).run(slot.id, stamp, stamp, stamp);
+  const before = savedAssignments();
+  const extra = db.prepare("SELECT * FROM assignments WHERE protocol='keep-next-month-extra'").get();
+  assert.throws(() => generateNextMonthSchedule({ referenceDate: '2042-10-19', userId: 1 }), /Confirme/);
+  assert.deepEqual(savedAssignments(), before);
+  const regenerated = generateNextMonthSchedule({ referenceDate: '2042-10-19', userId: 1, confirmOrdinaryReset: true });
+  assert.equal(regenerated.action, 'REGENERATE');
+  assert.equal(regenerated.competency.id, generation.competency.id);
+  assert.deepEqual(db.prepare("SELECT * FROM assignments WHERE protocol='keep-next-month-extra'").get(), extra);
+  assert.equal(db.prepare('SELECT current_capacity FROM service_slots WHERE id=?').get(slot.id).current_capacity, 4);
+  assert.equal(db.prepare('SELECT fourth_column_open FROM schedule_pdf_column_releases WHERE competency_id=?').get(generation.competency.id).fourth_column_open, 1);
+  assert.deepEqual(db.prepare(`SELECT a.* FROM assignments a JOIN service_slots s ON s.id=a.service_slot_id WHERE s.competency_id=? ORDER BY a.id`).all(december.competency.id), decemberBefore);
 });
 
 test('initial import accepts only the continuous cycle and defaults to it when omitted', async () => {

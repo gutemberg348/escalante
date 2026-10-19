@@ -5,6 +5,7 @@ import { db, audit, now } from '../../database/index.js';
 import { allow } from '../../middlewares/auth.js';
 import { isMajoradoDate } from '../../scheduling/majorado.js';
 import { generateNextMonthSchedule, generateOrdinaryAssignments, regenerateOrdinaryAssignments, previewMonthGeneration, generateSelectedMonthSchedule } from '../../scheduling/monthly.js';
+import { monthDeletionImpact, deleteMonth } from '../../scheduling/delete-month.js';
 
 const router = Router();
 const monthNames = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
@@ -64,13 +65,34 @@ router.post('/generate-month', allow('ADMIN', 'SCHEDULER'), (req, res, next) => 
 });
 router.post('/generate-next', allow('ADMIN', 'SCHEDULER'), (req, res, next) => {
   try {
-    const generation = generateNextMonthSchedule({ userId: req.user.id, reason: 'Geração manual pelo painel' });
+    const input = z.object({ confirmOrdinaryReset: z.boolean().default(false) }).parse(req.body ?? {});
+    const generation = generateNextMonthSchedule({ ...input, userId: req.user.id, reason: 'Geração manual pelo painel' });
     const item = db.prepare(`${slotsCountSql} HAVING c.id=?`).get(generation.competency.id);
     res.status(generation.competencyCreated ? 201 : 200).json({
       item: { ...item, slots_count: Number(item.slots_count) },
       generation: generationDetails(generation)
     });
-  } catch (error) { next(error); }
+  } catch (error) {
+    if (error.status) return res.status(error.status).json({ message: error.message });
+    next(error);
+  }
+});
+router.get('/:id/deletion-impact', allow('ADMIN', 'SCHEDULER'), (req, res, next) => {
+  try { res.json({ item: monthDeletionImpact(z.coerce.number().int().positive().parse(req.params.id)) }); }
+  catch (error) {
+    if (error.status) return res.status(error.status).json({ message: error.message });
+    next(error);
+  }
+});
+router.delete('/:id', allow('ADMIN', 'SCHEDULER'), (req, res, next) => {
+  try {
+    const competencyId = z.coerce.number().int().positive().parse(req.params.id);
+    z.object({ confirm: z.literal(true) }).parse(req.body);
+    res.json(deleteMonth({ competencyId, userId: req.user.id, req }));
+  } catch (error) {
+    if (error.status) return res.status(error.status).json({ message: error.message });
+    next(error);
+  }
 });
 router.get('/:id/regeneration-impact', allow('ADMIN', 'SCHEDULER'), (req, res, next) => {
   try {

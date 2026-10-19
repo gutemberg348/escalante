@@ -216,7 +216,7 @@ export function previewMonthGeneration({ year, month }) {
     canGenerate: totals.lockedOrdinaryAssignments === 0 };
 }
 
-export function generateSelectedMonthSchedule({ year, month, confirmOrdinaryReset = false, userId = null }) {
+export function generateSelectedMonthSchedule({ year, month, confirmOrdinaryReset = false, userId = null, reason = null }) {
   const preview = previewMonthGeneration({ year, month });
   if (preview.action === 'REGENERATE' && !confirmOrdinaryReset) {
     throw Object.assign(new Error('Confirme a substituição dos serviços ordinários do mês escolhido antes de regerar.'), { status: 409 });
@@ -224,23 +224,16 @@ export function generateSelectedMonthSchedule({ year, month, confirmOrdinaryRese
   if (!preview.canGenerate) throw Object.assign(new Error('O mês escolhido possui serviços ordinários fechados ou homologados. Revise esses serviços antes de regerar.'), { status: 409 });
   return db.transaction(() => {
     const prepared = ensureCompetencySchedule(`${year}-${String(month).padStart(2, '0')}-01`);
-    const reason = `${preview.action === 'REGENERATE' ? 'Regeneração' : 'Geração'} do mês escolhido no painel`;
+    const generationReason = reason ?? `${preview.action === 'REGENERATE' ? 'Regeneração' : 'Geração'} do mês escolhido no painel`;
     const generation = preview.action === 'REGENERATE'
-      ? regenerateOrdinaryAssignments({ competencyId: prepared.competency.id, userId, reason })
-      : generateOrdinaryAssignments({ competencyId: prepared.competency.id, userId, reason });
+      ? regenerateOrdinaryAssignments({ competencyId: prepared.competency.id, userId, reason: generationReason })
+      : generateOrdinaryAssignments({ competencyId: prepared.competency.id, userId, reason: generationReason });
     return { ...generation, competencyCreated: prepared.competencyCreated, action: preview.action, rule: preview.rule };
   })();
 }
 
-export function generateNextMonthSchedule({ userId = null, reason } = {}) {
-  const current = dayjs().startOf('month');
-  const latest = db.prepare(`SELECT year,month FROM competencies WHERE generated_at IS NOT NULL ORDER BY year DESC,month DESC LIMIT 1`).get();
-  const latestDate = latest ? dayjs(`${latest.year}-${String(latest.month).padStart(2, '0')}-01`) : null;
-  const base = latestDate?.isAfter(current, 'month') ? latestDate : current;
-  const target = base.add(1, 'month');
-  const prepared = ensureCompetencySchedule(target);
-  return {
-    ...generateOrdinaryAssignments({ competencyId: prepared.competency.id, userId, reason }),
-    competencyCreated: prepared.competencyCreated
-  };
+export function generateNextMonthSchedule({ userId = null, reason, confirmOrdinaryReset = false, referenceDate = dayjs() } = {}) {
+  const target = dayjs(referenceDate).startOf('month').add(1, 'month');
+  return generateSelectedMonthSchedule({ year: target.year(), month: target.month() + 1,
+    confirmOrdinaryReset, userId, reason });
 }

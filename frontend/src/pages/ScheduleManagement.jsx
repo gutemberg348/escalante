@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client.js';
 import { useMonthRollover } from '../hooks/useMonthRollover.js';
+import DeleteMonthButton from '../components/DeleteMonthButton.jsx';
 
 const dateLabel = (date) => new Date(`${date}T00:00`).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', weekday: 'short' });
 const periodLabel = (period) => period === 'DIURNO' ? 'Dia · 07h às 19h' : 'Noite · 19h às 07h';
@@ -17,13 +18,15 @@ export default function ScheduleManagement() {
   const [selectedServiceType, setSelectedServiceType] = useState('EXTRAORDINARY');
   const [moving, setMoving] = useState(null);
   const [target, setTarget] = useState('');
+  const [deletingMonth, setDeletingMonth] = useState(false);
+  const [monthFeedback, setMonthFeedback] = useState('');
   const { data: me } = useQuery({ queryKey: ['me'], queryFn: () => api.get('/auth/me').then((response) => response.data.user) });
   const { data: competencies = [] } = useQuery({ queryKey: ['competencies'], queryFn: () => api.get('/competencies').then((response) => response.data.items) });
   const generatedCompetencies = useMemo(() => competencies.filter((item) => item.generated_at), [competencies]);
   useMonthRollover(competencies, competencyId, (id) => {
     setCompetencyId(id);
     setSearchParams({ competency_id: id }, { replace: true });
-  }, Boolean(editor || moving));
+  }, Boolean(editor || moving || deletingMonth));
   const { data: schedule, isLoading } = useQuery({
     queryKey: ['schedule-management', competencyId],
     queryFn: () => api.get('/service-slots/manage', { params: { competency_id: competencyId } }).then((response) => response.data),
@@ -111,12 +114,17 @@ export default function ScheduleManagement() {
 
   return <>
     <header className="page-header"><div><span className="eyebrow">ADMINISTRAÇÃO DA ESCALA</span><h1>Gerenciar escala</h1><p>Edite a planilha mensal: inclua, troque, mova ou retire militares de qualquer vaga aberta.</p></div>
-      <button type="button" className="secondary-button" disabled={!competencyId} onClick={downloadPdf}>Baixar PDF da escala</button>
+      <div className="month-toolbar-actions"><button type="button" className="secondary-button" disabled={!competencyId} onClick={downloadPdf}>Baixar PDF da escala</button>
+        {editable && <DeleteMonthButton competencyId={competencyId} onOpenChange={setDeletingMonth} onDeleted={(id, message) => {
+          setCompetencyId(id); setSearchParams(id ? { competency_id: id } : {}, { replace: true }); setMonthFeedback(message);
+        }} />}</div>
     </header>
 
     <section className="panel schedule-manager-filter"><div><span className="eyebrow">MÊS DA ESCALA</span><h2>{schedule?.competency?.name || 'Selecione o mês'}</h2><p>Somente meses já gerados aparecem aqui. O PDF usa o mesmo layout encaminhado pelo WhatsApp.</p></div><label>Competência<select disabled={!generatedCompetencies.length} value={competencyId} onChange={(event) => { const id = event.target.value; setCompetencyId(id); setSearchParams({ competency_id: id }, { replace: true }); }}>{!generatedCompetencies.length && <option value="">Nenhum mês gerado</option>}{generatedCompetencies.map((competency) => <option key={competency.id} value={competency.id}>{competency.name}</option>)}</select></label></section>
 
     {!editable && <p className="error">Seu perfil pode consultar a escala e baixar o PDF, mas as alterações são restritas a administradores e escalantes.</p>}
+    {monthFeedback && <p className="success" role="status">{monthFeedback}</p>}
+    {!generatedCompetencies.length && <section className="panel"><p>Nenhum mês gerado. Use Gestão do mês para gerar a escala desejada.</p></section>}
     {actionError && <p className="error schedule-manager-feedback">{actionError.response?.data?.message || 'Não foi possível atualizar a escala.'}</p>}
     {isLoading && <section className="panel"><p className="modal-copy">Carregando planilha...</p></section>}
     {competencyId && !isLoading && <section className="panel schedule-sheet-wrap"><div className="schedule-sheet-title"><div><span className="eyebrow">PLANILHA EDITÁVEL</span><h2>{schedule?.competency?.name}</h2></div><span>{vacancies.length} vagas livres</span></div>

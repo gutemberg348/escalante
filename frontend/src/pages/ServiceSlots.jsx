@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client.js';
 import { useMonthRollover } from '../hooks/useMonthRollover.js';
+import DeleteMonthButton from '../components/DeleteMonthButton.jsx';
 
 const dateLabel = (date) => new Date(`${date}T00:00`).toLocaleDateString('pt-BR');
 const periodLabel = (period) => period === 'DIURNO' ? 'Dia · 07h às 19h' : 'Noite · 19h às 07h';
@@ -32,11 +33,15 @@ export default function ServiceSlots() {
   const [downloadError, setDownloadError] = useState('');
   const [isDownloading, setIsDownloading] = useState(false);
   const [monthAction, setMonthAction] = useState(null);
+  const [deletingMonth, setDeletingMonth] = useState(false);
+  const [monthFeedback, setMonthFeedback] = useState('');
+  const { data: me } = useQuery({ queryKey: ['me'], queryFn: () => api.get('/auth/me').then((response) => response.data.user) });
+  const editable = ['ADMIN', 'SCHEDULER'].includes(me?.role);
   const [targetMonth, setTargetMonth] = useState({ year: new Date().getFullYear(), month: new Date().getMonth() + 1 });
   const [destructiveAcknowledged, setDestructiveAcknowledged] = useState(false);
   const { data: competencies = [] } = useQuery({ queryKey: ['competencies'], queryFn: () => api.get('/competencies').then((response) => response.data.items) });
   const generatedCompetencies = useMemo(() => competencies.filter((item) => item.generated_at), [competencies]);
-  useMonthRollover(competencies, competencyId, setCompetencyId, Boolean(settingsOpen || monthAction));
+  useMonthRollover(competencies, competencyId, setCompetencyId, Boolean(settingsOpen || monthAction || deletingMonth));
   const { data: slots = [] } = useQuery({ queryKey: ['slots', competencyId], queryFn: () => api.get('/service-slots', { params: { competency_id: competencyId } }).then((response) => response.data.items), enabled: Boolean(competencyId) });
   const { data: pdfColumns } = useQuery({ queryKey: ['pdf-columns', competencyId], queryFn: () => api.get('/service-slots/pdf-columns', { params: { competency_id: competencyId } }).then((response) => response.data.item), enabled: Boolean(competencyId) });
   const { data: confirmations, isLoading: confirmationsLoading } = useQuery({ queryKey: ['slot-confirmations', competencyId, confirmationDate], queryFn: () => api.get('/service-slots/confirmations', { params: { competency_id: competencyId, service_date: confirmationDate } }).then((response) => response.data), enabled: Boolean(competencyId && confirmationDate) });
@@ -54,13 +59,8 @@ export default function ServiceSlots() {
   const highestColumn = Math.max(2, ...Object.values(dayColumns).flat());
   const availablePositions = slots.reduce((total, slot) => total + Number(slot.available_positions || 0), 0);
   const nextMonth = useMemo(() => {
-    const today = new Date();
-    const currentIndex = today.getFullYear() * 12 + today.getMonth() + 1;
-    const latestIndex = generatedCompetencies.reduce((latest, item) => Math.max(latest, item.year * 12 + item.month), 0);
-    const nextIndex = Math.max(currentIndex, latestIndex) + 1;
-    const year = Math.floor((nextIndex - 1) / 12);
-    const month = ((nextIndex - 1) % 12) + 1;
-    return { year, month };
+    const next = new Date(); next.setDate(1); next.setMonth(next.getMonth() + 1);
+    return { year: next.getFullYear(), month: next.getMonth() + 1 };
   }, [generatedCompetencies]);
 
   useEffect(() => {
@@ -165,11 +165,12 @@ export default function ServiceSlots() {
     <section className="panel month-toolbar">
       <label>Mês exibido<select disabled={!generatedCompetencies.length} value={competencyId} onChange={(event) => setCompetencyId(event.target.value)}>{!generatedCompetencies.length && <option value="">Nenhum mês gerado</option>}{generatedCompetencies.map((competency) => <option value={competency.id} key={competency.id}>{competency.name}</option>)}</select></label>
       <div className="month-toolbar-stats"><span><strong>{days.length}</strong> dias</span><span><strong>{availablePositions}</strong> vagas livres</span><span><strong>{highestColumn}</strong> posições</span></div>
-      <div className="month-toolbar-actions"><button type="button" className="secondary-button" onClick={() => downloadPdf()} disabled={!competencyId || isDownloading}>{isDownloading ? 'Baixando…' : 'Baixar PDF'}</button><button type="button" className="secondary-button" onClick={() => openMonthDialog('REGENERATE')} disabled={!competencyId || generateSelected.isPending}>Regerar / escolher mês</button><button type="button" className="secondary-button" onClick={openSettings} disabled={!dates.length}>Colunas</button><button type="button" onClick={() => navigate(`/gerenciar-escala?competency_id=${competencyId}`)} disabled={!competencyId}>Ajustar escala</button></div>
+      <div className="month-toolbar-actions"><button type="button" className="secondary-button" onClick={() => downloadPdf()} disabled={!competencyId || isDownloading}>{isDownloading ? 'Baixando…' : 'Baixar PDF'}</button><button type="button" className="secondary-button" onClick={() => openMonthDialog('REGENERATE')} disabled={!competencyId || generateSelected.isPending}>Regerar / escolher mês</button><button type="button" className="secondary-button" onClick={openSettings} disabled={!dates.length}>Colunas</button><button type="button" onClick={() => navigate(`/gerenciar-escala?competency_id=${competencyId}`)} disabled={!competencyId}>Ajustar escala</button>{editable && <DeleteMonthButton competencyId={competencyId} onOpenChange={setDeletingMonth} onDeleted={(id, message) => { setCompetencyId(id); setMonthFeedback(message); generateSelected.reset(); }} />}</div>
     </section>
     {generateSelected.isSuccess && <div className="success month-generation-feedback"><strong>{generated.item.name}</strong> {generated.generation.action === 'REGENERATE' ? 'regerado' : 'gerado'} com {generated.generation.ordinaryDutyDays} serviços ordinários. Regra: {generated.generation.rule.label}. O download do PDF foi iniciado e o mês já está aberto abaixo.{generated.generation.conflictDays.length > 0 && <> Revise {generated.generation.conflictDays.length} dia(s) com conflito.</>}</div>}
     {generateSelected.isError && !monthAction && <div className="error month-generation-feedback">{generateSelected.error?.response?.data?.message || 'Não foi possível gerar a escala do mês.'}</div>}
     {downloadError && <div className="error month-generation-feedback">{downloadError}</div>}
+    {monthFeedback && <p className="success" role="status">{monthFeedback}</p>}
     {!generatedCompetencies.length
       ? <section className="panel empty-month"><h2>Nenhum mês gerado</h2><p>Use “Gerar / regerar mês” e escolha o mês e o ano. A escala será preparada e o PDF será baixado automaticamente.</p></section>
       : <section className="panel table-wrap"><div className="table-title"><div><h2>Horários de {selectedCompetency?.name}</h2><span>{days.length} dias neste mês</span></div></div>
@@ -184,7 +185,7 @@ export default function ServiceSlots() {
       <div className="modal-header"><div><span className="eyebrow">PLANEJAMENTO MENSAL</span><h2>Gerar ou regerar escala</h2></div><button className="close-button" disabled={generateSelected.isPending} onClick={() => setMonthAction(null)} aria-label="Fechar">×</button></div>
       <div className="month-target-picker"><label>Mês<select value={targetMonth.month} disabled={generateSelected.isPending} onChange={(event) => selectTargetMonth('month', Number(event.target.value))}>{monthNames.map((name, index) => <option key={name} value={index + 1}>{name}</option>)}</select></label>
         <label>Ano<input type="number" min="2020" max="2100" value={targetMonth.year} disabled={generateSelected.isPending} onChange={(event) => selectTargetMonth('year', event.target.value)} /></label>
-        <button type="button" className="secondary-button" disabled={generateSelected.isPending} onClick={() => { setTargetMonth(nextMonth); setDestructiveAcknowledged(false); generateSelected.reset(); }}>Próximo mês disponível</button></div>
+        <button type="button" className="secondary-button" disabled={generateSelected.isPending} onClick={() => { setTargetMonth(nextMonth); setDestructiveAcknowledged(false); generateSelected.reset(); }}>Próximo mês</button></div>
       {!validTargetMonth ? <p className="error">Informe um ano entre 2020 e 2100.</p> : generationPreview.isFetching ? <p className="modal-copy" role="status">Conferindo as regras e os serviços do mês escolhido…</p>
         : generationPreview.isError ? <p className="error">{generationPreview.error.response?.data?.message || 'Não foi possível conferir o mês escolhido.'}</p> : preview && <>
           <div className="month-target-summary"><span>{isRegeneration ? 'REGERAÇÃO' : 'NOVA ESCALA'}</span><strong>{preview.competency.name}</strong><small>{preview.expectedDays} dias · Dia e noite · {preview.rule.label}</small></div>

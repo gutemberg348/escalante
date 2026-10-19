@@ -1236,7 +1236,7 @@ test('a configured administrator identified by LID can open columns without bein
 test('configured administrators can request generation and normal members can still consult the PDF', async () => {
   setting.run('whatsapp_admin_member_ids', '[1]', stamp);
   await receive('/gerar-proximo-mes', []);
-  assert.match(replies.at(-1).text, /Posso gerar a escala/);
+  assert.match(replies.at(-1).text, /Posso gerar a escala|já existe\. Regerar/);
   setting.run('whatsapp_admin_member_ids', '[]', stamp);
   await receive('/escala', []);
   assert.ok(replies.at(-1).document);
@@ -1249,7 +1249,7 @@ const generationPending = () => JSON.parse(db.prepare('SELECT value FROM system_
 async function askToGenerate() {
   setting.run('whatsapp_admin_member_ids', '[1]', stamp);
   await receive('@Escalante gerar próximo mês', [bot]);
-  assert.match(replies.at(-1).text, /Posso gerar a escala/);
+  assert.match(replies.at(-1).text, /Posso gerar a escala|já existe\. Regerar/);
   assert.match(replies.at(-1).text, /SIM/);
   assert.doesNotMatch(replies.at(-1).text, /confirmar-gerar-proximo-mes/);
   return generationPending();
@@ -1323,7 +1323,7 @@ test('a stale target cannot silently generate a different month', async () => {
   const pending = await askToGenerate();
   setting.run(generationPendingKey, JSON.stringify({ ...pending, target: '2000-01' }), stamp);
   await receive('sim', []);
-  assert.match(replies.at(-1).text, /próximo mês disponível mudou/);
+  assert.match(replies.at(-1).text, /próximo mês mudou/);
   assert.equal(generationPending(), null);
 });
 
@@ -1335,5 +1335,25 @@ test('the legacy confirm command requires a pending question and duplicate deliv
   const message = { key: { id: `in-${++sequence}`, remoteJid: group, participant: sender }, message: { conversation: '/confirmar-gerar-proximo-mes' } };
   await handleIncomingMessages(socket, { messages: [message, message] });
   assert.match(replies.at(-1).text, /WhatsApp desconectado/);
+  assert.equal(generationPending(), null);
+});
+
+test('next month generation always offers the next calendar month even when later months exist', async () => {
+  const date = new Date();
+  const target = new Date(date.getFullYear(), date.getMonth() + 1, 1);
+  generatedMonth(target.getFullYear(), target.getMonth() + 1);
+  generatedMonth(target.getFullYear() + 2, 12);
+  const pending = await askToGenerate();
+  assert.equal(pending.target, `${target.getFullYear()}-${String(target.getMonth() + 1).padStart(2, '0')}`);
+  assert.equal(pending.action, 'REGENERATE');
+  assert.match(replies.at(-1).text, /já existe\. Regerar/);
+  assert.ok(replies.at(-1).text.length < 180);
+});
+
+test('a generation confirmation cannot silently become regeneration after another command creates the month', async () => {
+  const pending = await askToGenerate();
+  setting.run(generationPendingKey, JSON.stringify({ ...pending, action: pending.action === 'GENERATE' ? 'REGENERATE' : 'GENERATE' }), stamp);
+  await receive('sim', []);
+  assert.match(replies.at(-1).text, /escala mudou desde a pergunta/);
   assert.equal(generationPending(), null);
 });

@@ -25,13 +25,23 @@ Gerar e regerar usam sempre essa sequência contínua. Meses já publicados não
 
 ## Gerar ou regerar um mês escolhido
 
-Na página **Gestão do mês**, use **Gerar / regerar mês** ou **Regerar / escolher mês**. Na janela, escolha o mês e o ano exatos. O atalho **Próximo mês disponível** preenche o próximo mês sem impedir a escolha de outro período.
+Na página **Gestão do mês**, use **Gerar / regerar mês** ou **Regerar / escolher mês**. Na janela, escolha o mês e o ano exatos. O atalho **Próximo mês** preenche o mês seguinte ao atual no calendário, mesmo que já esteja gerado, sem impedir a escolha de outro período.
 
 A prévia informa se é uma nova escala ou uma regeração, mostra a regra de ciclo válida para aquele mês e os dias das cinco alas. Também considera mudanças permanentes, remanejamentos temporários, férias, licença, afastamento, autorização e participação na ordinária.
 
 Se o mês já foi gerado, os ordinários e suas observações manuais serão refeitos após a confirmação. Extras, tipos dos extras e a configuração das colunas são preservados. Serviços ordinários fechados ou homologados impedem a regeração completa até a revisão desses serviços.
 
 Ao confirmar, somente o mês escolhido é processado. A tela abre esse mês e baixa o PDF. O mês ativo do WhatsApp permanece o configurado anteriormente. Se a execução falhar, a transação restaura os ordinários anteriores.
+
+No WhatsApp, **@Escalante gerar próximo mês** também usa o próximo mês do calendário. Se ele já existir, o bot avisa que irá regerar os ordinários. O administrador responde **SIM** ou **NÃO** à pergunta curta. Regerar preserva extras e colunas; o pedido nunca pula para o mês seguinte só porque a escala já existe.
+
+## Excluir um mês
+
+Em **Gerenciar escala** ou **Gestão do mês**, selecione a competência e clique em **Excluir mês**. A confirmação mostra o nome do mês e a quantidade de ordinários e extras que serão removidos. Administradores e escalantes podem confirmar a exclusão.
+
+A exclusão remove permanentemente o mês, seus horários, suas marcações e seus ajustes de colunas e alas temporárias. O cadastro dos militares, as alas permanentes, a sequência contínua e os outros meses são preservados. A operação fica registrada na auditoria com os dados removidos.
+
+Se o mês excluído estava ativo no WhatsApp, a fila é encerrada e outro mês gerado é selecionado. Se não restar nenhum mês, a seleção fica vazia até uma nova geração. Falhas durante a exclusão desfazem toda a operação.
 
 ## Trocar ou remanejar um militar
 

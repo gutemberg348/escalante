@@ -408,7 +408,12 @@ Somente administradores selecionados no painel WhatsApp podem gerar e confirmar.
    @Escalante gerar próximo mês
    @Escalante gerar escala do próximo mês
 
+"Próximo mês" é sempre o mês seguinte ao atual no calendário. Exemplo: em
+outubro, o pedido é para novembro, mesmo que novembro ou dezembro já existam.
+
 O bot pergunta: "Posso gerar a escala de [mês/ano] e enviar o PDF?"
+Se já existir: "A escala de [mês/ano] já existe. Regerar os ordinários e enviar
+o PDF? Extras mantidos. SIM ou NÃO."
 O mesmo administrador que fez o pedido responde no mesmo grupo:
 
    SIM
@@ -417,7 +422,9 @@ O mesmo administrador que fez o pedido responde no mesmo grupo:
 Pode responder diretamente à pergunta do bot ou enviar SIM no grupo enquanto
 a pergunta estiver pendente. A confirmação vale por 5 minutos. Não precisa
 digitar /confirmar-gerar-proximo-mes. Respostas repetidas não geram outro mês.
-Confira o mês informado: se o próximo mês já foi gerado, o bot oferece o seguinte.
+Se o mês já existe, SIM refaz somente os ordinários daquele mês, preservando os
+extras e a abertura das colunas. Não avança para outro mês. Ordinários fechados
+ou homologados precisam ser revisados no painel antes de regerar.
 
 O novo mês é gerado com o ciclo ordinário 1x4 e o PDF é publicado. A fila não
 começa automaticamente; envie o comando de início com a data e a coluna.
