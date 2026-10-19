@@ -77,13 +77,19 @@ export function saveWingRoster({ competency, entries, mode = 'CONTINUOUS', userI
   const stamp = now();
   const before = membershipsForMonth(competency);
   if (db.prepare('SELECT 1 FROM wing_cycle_rules LIMIT 1').get()) throw Object.assign(new Error('As alas já foram cadastradas. Use a troca de ala para ajustar os militares.'), { status: 409 });
+  const effectiveMonth = dayjs(start).add(1, 'month').format('YYYY-MM-DD');
+  // Keep the observed current roster as the baseline; edited memberships start
+  // next month. Applying them sooner uses a separate dated override.
+  const selectedIds = new Set(entries.map((entry) => entry.memberId));
+  const baseline = previewWingImport(competency).entries.filter((entry) => selectedIds.has(entry.memberId));
   const save = db.prepare(`INSERT INTO wing_memberships (member_id,wing_id,position_number,effective_month,updated_by,updated_at) VALUES (?,?,?,?,?,?)`);
   db.prepare('INSERT INTO wing_cycle_rules (effective_month,reference_date,mode,updated_by,updated_at) VALUES (?,?,?,?,?)')
     .run(start, start, mode, userId, stamp);
+  for (const entry of baseline) save.run(entry.memberId, entry.wingId, entry.positionNumber, start, userId, stamp);
   for (const entry of entries) {
-    save.run(entry.memberId, entry.wingId, entry.positionNumber, start, userId, stamp);
+    save.run(entry.memberId, entry.wingId, entry.positionNumber, effectiveMonth, userId, stamp);
     db.prepare('UPDATE members SET default_wing_id=?,updated_at=? WHERE id=?').run(entry.wingId, stamp, entry.memberId);
   }
   audit({ userId, action: 'IMPORT_WING_ROSTER', entityType: 'COMPETENCY', entityId: competency.id,
-    before, after: { entries, mode }, reason: 'Alas cadastradas a partir da escala selecionada, sem alterar seus serviços' });
+    before, after: { entries, baseline, mode, effectiveMonth }, reason: 'Cadastro das alas programado a partir do próximo mês' });
 }

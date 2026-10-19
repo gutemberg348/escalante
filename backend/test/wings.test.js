@@ -119,6 +119,104 @@ test('import saves the roster without changing the existing scale or extras', as
   assert.equal(duplicate.status, 409);
 });
 
+const editedRoster = () => [memberEntry(1, 2), memberEntry(2, 1), ...[3, 4, 5].map((member) => memberEntry(member, member))];
+const savedAssignments = () => db.prepare('SELECT * FROM assignments ORDER BY id').all();
+
+test('edited initial roster starts next month and keeps the original current baseline', async () => {
+  const before = savedAssignments();
+  const result = await request('/import', { competencyId: competency.id, entries: editedRoster() });
+  assert.equal(result.status, 200, JSON.stringify(result.data));
+  assert.equal(result.data.effectiveMonth, '2031-08-01');
+  assert.equal(result.data.appliedFromDate, null);
+  assert.deepEqual(savedAssignments(), before);
+  assert.equal(membershipsForMonth(competency).find((row) => row.member_id === 1).wing_id, wingId(1));
+  regenerateOrdinaryAssignments({ competencyId: competency.id });
+  assert.deepEqual(memberDates(1), ['2031-07-01', '2031-07-06', '2031-07-11', '2031-07-16', '2031-07-21', '2031-07-26', '2031-07-31']);
+  const next = ensureCompetencySchedule('2031-08-01').competency;
+  generateOrdinaryAssignments({ competencyId: next.id });
+  assert.equal(memberDates(1, next.id)[0], '2031-08-01');
+});
+
+test('initial registration can also apply remaining dates without touching past rows or extras', async () => {
+  assignment(6, '2031-07-12', 'DIURNO', 'EXTRAORDINARY', 2);
+  const before = savedAssignments();
+  const result = await request('/import', { competencyId: competency.id, entries: editedRoster(), applyToCurrentMonth: true, fromDate: '2031-07-10' });
+  assert.equal(result.status, 200, JSON.stringify(result.data));
+  assert.equal(result.data.appliedFromDate, '2031-07-10');
+  for (const row of before) assert.deepEqual(db.prepare('SELECT * FROM assignments WHERE id=?').get(row.id), row);
+  assert.deepEqual(memberDates(1), ['2031-07-01', '2031-07-12', '2031-07-17', '2031-07-22', '2031-07-27']);
+  const next = ensureCompetencySchedule('2031-08-01').competency;
+  generateOrdinaryAssignments({ competencyId: next.id });
+  assert.equal(memberDates(1, next.id)[0], '2031-08-01');
+});
+
+test('registration rolls back everything when applying current dates conflicts with an extra', async () => {
+  assignment(6, '2031-07-12', 'DIURNO', 'EXTRAORDINARY', 1);
+  const before = savedAssignments();
+  const membersBefore = db.prepare('SELECT * FROM members ORDER BY id').all();
+  const result = await request('/import', { competencyId: competency.id, entries: editedRoster(), applyToCurrentMonth: true, fromDate: '2031-07-10' });
+  assert.equal(result.status, 409, JSON.stringify(result.data));
+  assert.deepEqual(savedAssignments(), before);
+  assert.deepEqual(db.prepare('SELECT * FROM members ORDER BY id').all(), membersBefore);
+  for (const table of ['wing_memberships', 'wing_month_overrides', 'wing_cycle_rules', 'audit_logs']) {
+    assert.equal(db.prepare(`SELECT COUNT(*) total FROM ${table}`).get().total, 0);
+  }
+});
+
+test('registration rejects invalid or past apply dates before saving anything', async () => {
+  for (const fromDate of ['2020-07-10', '2031-07-32', '2031-08-01']) {
+    const result = await request('/import', { competencyId: competency.id, entries: editedRoster(), applyToCurrentMonth: true, fromDate });
+    assert.equal(result.status, 400);
+    assert.equal(db.prepare('SELECT COUNT(*) total FROM wing_cycle_rules').get().total, 0);
+  }
+});
+
+test('member selector changes next month and can also update the current remaining dates atomically', async () => {
+  await importRoster();
+  regenerateOrdinaryAssignments({ competencyId: competency.id });
+  assignment(6, '2031-07-12', 'DIURNO', 'EXTRAORDINARY', 2);
+  const protectedRows = db.prepare(`SELECT a.* FROM assignments a JOIN service_slots s ON s.id=a.service_slot_id
+    WHERE s.service_date<'2031-07-10' OR a.service_type='EXTRAORDINARY' ORDER BY a.id`).all();
+  const result = await request('/move', { competencyId: competency.id, scope: 'NEXT_MONTH', entries: [memberEntry(1, 2), memberEntry(2, 1)],
+    applyToCurrentMonth: true, fromDate: '2031-07-10' });
+  assert.equal(result.status, 200, JSON.stringify(result.data));
+  for (const row of protectedRows) assert.deepEqual(db.prepare('SELECT * FROM assignments WHERE id=?').get(row.id), row);
+  assert.deepEqual(memberDates(1), ['2031-07-01', '2031-07-06', '2031-07-12', '2031-07-17', '2031-07-22', '2031-07-27']);
+  const next = ensureCompetencySchedule('2031-08-01').competency;
+  generateOrdinaryAssignments({ competencyId: next.id });
+  assert.equal(memberDates(1, next.id)[0], '2031-08-01');
+});
+
+test('a combined future/current move rolls back the future change on a current conflict', async () => {
+  await importRoster();
+  assignment(6, '2031-07-12', 'DIURNO', 'EXTRAORDINARY', 1);
+  const before = savedAssignments();
+  const memberships = db.prepare('SELECT * FROM wing_memberships ORDER BY id').all();
+  const result = await request('/move', { competencyId: competency.id, scope: 'NEXT_MONTH', entries: [memberEntry(1, 2), memberEntry(2, 1)],
+    applyToCurrentMonth: true, fromDate: '2031-07-10' });
+  assert.equal(result.status, 409);
+  assert.deepEqual(savedAssignments(), before);
+  assert.deepEqual(db.prepare('SELECT * FROM wing_memberships ORDER BY id').all(), memberships);
+  assert.equal(db.prepare('SELECT COUNT(*) total FROM wing_month_overrides').get().total, 0);
+});
+
+test('combined changes reject past dates and unauthorized users', async () => {
+  await importRoster();
+  const body = { competencyId: competency.id, scope: 'NEXT_MONTH', entries: [memberEntry(1, 1, 2)], applyToCurrentMonth: true, fromDate: '2020-07-01' };
+  assert.equal((await request('/move', body)).status, 400);
+  assert.equal((await request('/move', { ...body, fromDate: '2031-07-10' }, 'POST', 'SYSTEM_OPERATOR')).status, 403);
+});
+
+test('initial current application cannot remove homologated ordinary services', async () => {
+  assignment(1, '2031-07-11');
+  db.prepare("UPDATE service_slots SET homologated_at=? WHERE competency_id=? AND service_date='2031-07-11'").run(stamp, competency.id);
+  const before = savedAssignments();
+  const result = await request('/import', { competencyId: competency.id, entries: editedRoster(), applyToCurrentMonth: true, fromDate: '2031-07-10' });
+  assert.equal(result.status, 409);
+  assert.deepEqual(savedAssignments(), before);
+  assert.equal(db.prepare('SELECT COUNT(*) total FROM wing_cycle_rules').get().total, 0);
+});
+
 test('the continuous cycle crosses month lengths, leap years and year boundaries without restarting', () => {
   const continuous = { mode: 'CONTINUOUS', reference_date: '2031-01-01' };
   assert.deepEqual(wingDays({ year: 2031, month: 1 }, 1, continuous).map((d) => Number(d.slice(-2))), [1, 6, 11, 16, 21, 26, 31]);

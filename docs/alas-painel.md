@@ -5,14 +5,17 @@ A página **Alas** organiza os serviços ordinários em cinco alas, numeradas de
 ## Primeiro cadastro
 
 1. Abra **Alas** e selecione a escala que deve servir de referência.
-2. Confira a regra fixa: ciclo 1x4 contínuo.
-3. Clique em **Cadastrar alas pela escala atual**.
+2. Clique em **Cadastrar militares nas alas**.
+3. Confira o aviso: as mudanças valerão a partir do mês seguinte ao selecionado, com a data de início indicada na tela.
 4. Confira a ala e a posição de cada militar. No mês de referência, a Ala 1 corresponde aos dias 1, 6, 11…; a Ala 2 aos dias 2, 7, 12…; e assim até a Ala 5.
-5. Confirme o cadastro.
+5. Se quiser atualizar também a escala selecionada, marque **Aplicar também nesta escala, nas datas que ainda não passaram** e escolha uma data de hoje em diante dentro desse mês. Essa opção vem desmarcada.
+6. Confirme o cadastro.
 
 São lidos apenas os serviços ordinários. Quem não tem ordinários no mês pode ser identificado pelo ciclo ordinário anterior, inclusive em férias. Casos com mais de um padrão são apresentados para conferência manual. Também é possível incluir militares manualmente na prévia.
 
-Esse cadastro preserva a escala existente e passa a orientar as gerações seguintes. Não altera os extras, as posições já publicadas nem os tipos de serviço.
+Por padrão, esse cadastro preserva a escala existente e passa a orientar as gerações do próximo mês em diante. Se o próximo mês já estiver gerado, use **Regerar** nele para aplicar. A ala identificada na escala de referência fica como histórico desse mês; a ala escolhida na conferência passa a valer no seguinte.
+
+Com a aplicação na escala selecionada habilitada, somente os ordinários dos militares cadastrados são recalculados a partir da data escolhida. Extras e datas anteriores são preservados. Conflitos com serviços ocupados, fechados ou homologados cancelam toda a operação, inclusive o cadastro futuro.
 
 ## Ciclo contínuo na virada do mês
 
@@ -31,6 +34,10 @@ Se o mês já foi gerado, os ordinários e suas observações manuais serão ref
 Ao confirmar, somente o mês escolhido é processado. A tela abre esse mês e baixa o PDF. O mês ativo do WhatsApp permanece o configurado anteriormente. Se a execução falhar, a transação restaura os ordinários anteriores.
 
 ## Trocar ou remanejar um militar
+
+Na página **Efetivo**, a coluna **Ala** tem um seletor com as alas 1 a 5, semelhante ao de Situação. Escolher uma ala abre uma confirmação, sem salvar imediatamente. A janela permite conferir a posição, trocar com outro militar e programar a mudança a partir do próximo mês. Também há a opção de aplicá-la às datas restantes da escala selecionada. Nesse caso, a mudança atual e a futura são salvas juntas; se houver conflito, nenhuma delas será salva. A tabela indica a mudança programada abaixo do seletor.
+
+Antes da primeira mudança individual, faça o cadastro inicial em **Alas → Cadastrar militares nas alas**. Somente administradores e responsáveis pela escala podem alterar alas.
 
 Clique em **Trocar / remanejar** ou use a tabela **Efetivo e mudanças programadas**.
 

@@ -56,6 +56,26 @@ function validateRoster(competency) {
   }
 }
 
+function setCurrentWingEntry(competency, item, fromDate, userId) {
+  const locked = db.prepare(`SELECT 1 FROM service_slots s JOIN assignments a ON a.service_slot_id=s.id
+    WHERE s.competency_id=? AND s.service_date>=? AND a.member_id=? AND a.service_type='ORDINARY'
+      AND a.status='CONFIRMED' AND (s.status<>'OPEN' OR s.homologated_at IS NOT NULL) LIMIT 1`).get(competency.id, fromDate, item.memberId);
+  if (locked) fail('Há serviços fechados ou homologados neste período. Escolha outra data para remanejar.', 409);
+  db.prepare(`INSERT INTO wing_month_overrides (competency_id,member_id,wing_id,position_number,from_date,updated_by,updated_at) VALUES (?,?,?,?,?,?,?)
+    ON CONFLICT(competency_id,member_id,from_date) DO UPDATE SET wing_id=excluded.wing_id,position_number=excluded.position_number,updated_by=excluded.updated_by,updated_at=excluded.updated_at`)
+    .run(competency.id, item.memberId, item.wingId, item.positionNumber, fromDate, userId, now());
+  db.prepare(`DELETE FROM assignments WHERE member_id=? AND service_type='ORDINARY' AND status='CONFIRMED'
+    AND service_slot_id IN (SELECT id FROM service_slots WHERE competency_id=? AND service_date>=?)`).run(item.memberId, competency.id, fromDate);
+}
+
+function generateChangedMembers(competency, entries, fromDate, userId, reason) {
+  const generation = generateOrdinaryAssignments({ competencyId: competency.id, userId,
+    memberIds: entries.map((item) => item.memberId), fromDate, reason });
+  if (generation.conflictDays.length) fail('O destino tem serviços ocupados ou posições indisponíveis. Nenhuma alteração foi salva. Use a troca entre militares ou ajuste as vagas no painel.', 409,
+    { conflicts: generation.conflictDays });
+  return generation;
+}
+
 router.get('/', handle((req, res) => {
   const competency = competencyFor(req.query.competency_id);
   const rule = cycleRuleForMonth(monthStart(competency));
@@ -71,18 +91,43 @@ router.get('/', handle((req, res) => {
 
 router.get('/import-preview', allow('ADMIN', 'SCHEDULER'), handle((req, res) => {
   const competency = competencyFor(req.query.competency_id);
-  res.json(previewWingImport(competency));
+  const applyFromDate = [monthStart(competency), dayjs().format('YYYY-MM-DD')].sort().at(-1);
+  res.json({ ...previewWingImport(competency), effectiveMonth: monthStart(nextMonth(competency)), applyFromDate,
+    canApplyCurrentMonth: applyFromDate <= dayjs(monthStart(competency)).endOf('month').format('YYYY-MM-DD') });
 }));
 
 router.post('/import', allow('ADMIN', 'SCHEDULER'), handle((req, res) => {
-  const input = z.object({ competencyId: id, mode, entries: z.array(entry).min(1).max(100) }).parse(req.body);
+  const input = z.object({ competencyId: id, mode, entries: z.array(entry).min(1).max(100),
+    applyToCurrentMonth: z.boolean().default(false), fromDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional() }).parse(req.body);
   const competency = competencyFor(input.competencyId);
   validateEntries(input.entries);
+  const future = nextMonth(competency);
+  if (monthStart(future) < dayjs().startOf('month').format('YYYY-MM-DD')) fail('Selecione uma escala mais recente para cadastrar as alas do próximo mês.');
+  const fromDate = input.fromDate ?? [monthStart(competency), dayjs().format('YYYY-MM-DD')].sort().at(-1);
+  if (input.applyToCurrentMonth && (!dayjs(fromDate).isValid() || dayjs(fromDate).format('YYYY-MM-DD') !== fromDate
+    || fromDate < dayjs().format('YYYY-MM-DD') || fromDate < monthStart(competency)
+    || fromDate > dayjs(monthStart(competency)).endOf('month').format('YYYY-MM-DD'))) {
+    fail('Escolha uma data válida, de hoje em diante, dentro da escala selecionada.');
+  }
+  let generation = null;
   db.transaction(() => {
     saveWingRoster({ competency, entries: input.entries, mode: input.mode, userId: req.user.id });
+    validateRoster(future);
+    if (input.applyToCurrentMonth) {
+      for (const item of input.entries) setCurrentWingEntry(competency, item, fromDate, req.user.id);
+    }
     validateRoster(competency);
+    if (input.applyToCurrentMonth) {
+      generation = generateChangedMembers(competency, input.entries, fromDate, req.user.id, 'Cadastro das alas aplicado nas datas restantes da escala');
+      audit({ userId: req.user.id, action: 'APPLY_WING_ROSTER_CURRENT_MONTH', entityType: 'COMPETENCY', entityId: competency.id,
+        after: { entries: input.entries, fromDate }, reason: 'Aplicação solicitada no cadastro das alas, preservando extras e datas anteriores' });
+    }
   })();
-  res.json({ message: 'Cinco alas cadastradas. A escala selecionada foi preservada; as próximas gerações já usarão as alas.' });
+  res.json({ generation, effectiveMonth: monthStart(future), appliedFromDate: input.applyToCurrentMonth ? fromDate : null,
+    message: `Militares cadastrados nas alas para ${dayjs(monthStart(future)).format('MM/YYYY')} em diante. `
+      + (input.applyToCurrentMonth ? `A escala selecionada também foi atualizada a partir de ${dayjs(fromDate).format('DD/MM/YYYY')}. Extras e datas anteriores foram preservados. `
+        : 'A escala selecionada foi preservada. ')
+      + 'Se o próximo mês já foi gerado, use Regerar nesse mês para aplicar.' });
 }));
 
 router.put('/cycle', allow('ADMIN', 'SCHEDULER'), handle((req, res) => {
@@ -95,7 +140,8 @@ router.put('/cycle', allow('ADMIN', 'SCHEDULER'), handle((req, res) => {
 
 router.post('/move', allow('ADMIN', 'SCHEDULER'), handle((req, res) => {
   const input = z.object({ competencyId: id, scope: z.enum(['THIS_MONTH', 'NEXT_MONTH']),
-    entries: z.array(entry).min(1).max(2), fromDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional() }).parse(req.body);
+    entries: z.array(entry).min(1).max(2), applyToCurrentMonth: z.boolean().default(false),
+    fromDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional() }).parse(req.body);
   const competency = competencyFor(input.competencyId);
   if (!cycleRuleForMonth(monthStart(competency))) fail('Cadastre as alas desse mês antes de remanejar.');
   validateEntries(input.entries);
@@ -103,7 +149,8 @@ router.post('/move', allow('ADMIN', 'SCHEDULER'), handle((req, res) => {
   const fromDate = input.fromDate ?? [monthStart(competency), dayjs().format('YYYY-MM-DD')].sort().at(-1);
   const target = input.scope === 'NEXT_MONTH' ? nextMonth(competency) : competency;
   if (monthStart(target) < dayjs().startOf('month').format('YYYY-MM-DD')) fail('Não é possível alterar alas de um mês passado.');
-  if (input.scope === 'THIS_MONTH' && (!dayjs(fromDate).isValid() || dayjs(fromDate).format('YYYY-MM-DD') !== fromDate
+  const applyCurrent = input.scope === 'THIS_MONTH' || input.applyToCurrentMonth;
+  if (applyCurrent && (!dayjs(fromDate).isValid() || dayjs(fromDate).format('YYYY-MM-DD') !== fromDate
       || fromDate < monthStart(competency) || fromDate > dayjs(monthStart(competency)).endOf('month').format('YYYY-MM-DD')
       || fromDate < dayjs().format('YYYY-MM-DD'))) fail('Escolha uma data válida, de hoje em diante, dentro do mês selecionado.');
   let generation = null;
@@ -114,16 +161,9 @@ router.post('/move', allow('ADMIN', 'SCHEDULER'), handle((req, res) => {
         db.prepare(`INSERT INTO wing_memberships (member_id,wing_id,position_number,effective_month,updated_by,updated_at) VALUES (?,?,?,?,?,?)
           ON CONFLICT(member_id,effective_month) DO UPDATE SET wing_id=excluded.wing_id,position_number=excluded.position_number,updated_by=excluded.updated_by,updated_at=excluded.updated_at`)
           .run(item.memberId, item.wingId, item.positionNumber, monthStart(target), req.user.id, stamp);
-      } else {
-        const locked = db.prepare(`SELECT 1 FROM service_slots s JOIN assignments a ON a.service_slot_id=s.id
-          WHERE s.competency_id=? AND s.service_date>=? AND a.member_id=? AND a.service_type='ORDINARY'
-            AND a.status='CONFIRMED' AND (s.status<>'OPEN' OR s.homologated_at IS NOT NULL) LIMIT 1`).get(competency.id, fromDate, item.memberId);
-        if (locked) fail('Há serviços fechados ou homologados neste período. Escolha outra data para remanejar.', 409);
-        db.prepare(`INSERT INTO wing_month_overrides (competency_id,member_id,wing_id,position_number,from_date,updated_by,updated_at) VALUES (?,?,?,?,?,?,?)
-          ON CONFLICT(competency_id,member_id,from_date) DO UPDATE SET wing_id=excluded.wing_id,position_number=excluded.position_number,updated_by=excluded.updated_by,updated_at=excluded.updated_at`)
-          .run(competency.id, item.memberId, item.wingId, item.positionNumber, fromDate, req.user.id, stamp);
-        db.prepare(`DELETE FROM assignments WHERE member_id=? AND service_type='ORDINARY' AND status='CONFIRMED'
-          AND service_slot_id IN (SELECT id FROM service_slots WHERE competency_id=? AND service_date>=?)`).run(item.memberId, competency.id, fromDate);
+      }
+      if (applyCurrent) {
+        setCurrentWingEntry(competency, item, fromDate, req.user.id);
       }
     }
     validateRoster(target);
@@ -135,17 +175,17 @@ router.post('/move', allow('ADMIN', 'SCHEDULER'), handle((req, res) => {
         const date = dayjs(row.effective_month);
         validateRoster({ id: -1, year: date.year(), month: date.month() + 1 });
       }
-    } else {
-      generation = generateOrdinaryAssignments({ competencyId: competency.id, userId: req.user.id,
-        memberIds: input.entries.map((item) => item.memberId), fromDate, reason: 'Remanejamento de ala somente neste mês' });
-      if (generation.conflictDays.length) fail('O destino tem serviços ocupados ou posições indisponíveis. Nenhuma alteração foi salva. Use a troca entre militares ou ajuste as vagas no painel.', 409,
-        { conflicts: generation.conflictDays });
+    }
+    if (applyCurrent) {
+      validateRoster(competency);
+      generation = generateChangedMembers(competency, input.entries, fromDate, req.user.id, 'Remanejamento de ala nas datas restantes do mês');
     }
     audit({ userId: req.user.id, action: 'MOVE_WING_MEMBERS', entityType: 'COMPETENCY', entityId: competency.id,
       before, after: input, reason: input.scope === 'NEXT_MONTH' ? 'Troca permanente a partir do próximo mês' : 'Remanejamento temporário, mantendo os extras' });
   })();
   res.json({ generation, message: input.scope === 'NEXT_MONTH'
     ? `Troca programada para ${dayjs(monthStart(target)).format('MM/YYYY')} em diante. Se esse mês já foi gerado, use Regerar para aplicar.`
+      + (applyCurrent ? ` A escala selecionada também foi atualizada a partir de ${dayjs(fromDate).format('DD/MM/YYYY')}, preservando extras e datas anteriores.` : '')
     : 'Remanejamento aplicado somente neste mês. Serviços extras e datas anteriores foram preservados.' });
 }));
 

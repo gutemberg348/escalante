@@ -13,6 +13,8 @@ export default function Wings() {
   const client = useQueryClient();
   const [competencyId, setCompetencyId] = useState('');
   const [preview, setPreview] = useState(null);
+  const [applyImportToCurrentMonth, setApplyImportToCurrentMonth] = useState(false);
+  const [importFromDate, setImportFromDate] = useState('');
   const [editing, setEditing] = useState(null);
   const [feedback, setFeedback] = useState('');
   const [downloadError, setDownloadError] = useState('');
@@ -38,8 +40,9 @@ export default function Wings() {
     await Promise.all(['wings', 'members', 'schedule-management', 'slots', 'dashboard', 'competencies'].map((key) => client.invalidateQueries({ queryKey: [key] })));
   };
   const loadPreview = useMutation({ mutationFn: () => api.get('/wings/import-preview', { params: { competency_id: competencyId } }),
-    onSuccess: (response) => { setPreview(response.data); saveImport.reset(); } });
+    onSuccess: (response) => { setPreview(response.data); setApplyImportToCurrentMonth(false); setImportFromDate(response.data.applyFromDate); saveImport.reset(); } });
   const saveImport = useMutation({ mutationFn: () => api.post('/wings/import', { competencyId: Number(competencyId),
+    applyToCurrentMonth: applyImportToCurrentMonth, fromDate: applyImportToCurrentMonth ? importFromDate : undefined,
     entries: preview.entries.map(({ memberId, wingId, positionNumber }) => ({ memberId, wingId, positionNumber })) }),
     onSuccess: async (response) => { setPreview(null); setFeedback(response.data.message); await refresh(); } });
   const move = useMutation({ mutationFn: () => {
@@ -80,8 +83,8 @@ export default function Wings() {
     {query.isLoading && competencyId && <section className="panel">Carregando alas…</section>}
     {!generated.length && <section className="panel"><h2>Prepare uma escala primeiro</h2><p>As alas serão cadastradas a partir de um mês já gerado.</p><Link to="/horarios">Ir para Gestão do mês</Link></section>}
     {data && <>
-      {!data.configured && editable && <section className="panel"><h2>Cadastrar alas</h2><p>Use a escala atual para organizar os militares nas cinco alas.</p>
-        <button onClick={() => loadPreview.mutate()} disabled={loadPreview.isPending}>{loadPreview.isPending ? 'Lendo escala…' : 'Cadastrar alas pela escala atual'}</button></section>}
+      {!data.configured && editable && <section className="panel"><h2>Cadastrar militares nas alas</h2><p>Confira as alas dos militares e programe as mudanças para o próximo mês.</p>
+        <button onClick={() => loadPreview.mutate()} disabled={loadPreview.isPending}>{loadPreview.isPending ? 'Lendo escala…' : 'Cadastrar militares nas alas'}</button></section>}
       <div className="wings-grid">{wings.map((wing) => {
         const roster = data.memberships.filter((row) => row.wing_id === wing.id);
         return <section key={wing.id} className={`panel wing-card wing-${wing.number}`}><header><span className="wing-number">{wing.number}</span><div><h2>{wing.name}</h2><span>Serviço ordinário · 24 horas</span></div></header>
@@ -109,8 +112,13 @@ export default function Wings() {
         })}</tbody></table></div></section>}
     </>}
     {preview && <div className="modal-backdrop"><section className="edit-modal wings-modal" role="dialog" aria-modal="true" aria-label="Conferir alas da escala">
-      <div className="modal-header"><div><span className="eyebrow">CADASTRAR PELA ESCALA ATUAL</span><h2>Confira cada militar</h2></div><button className="close-button" aria-label="Fechar" onClick={() => setPreview(null)} disabled={saveImport.isPending}>×</button></div>
-      <p>Ala 1 corresponde aos dias 1, 6, 11… deste mês; Ala 2 aos dias 2, 7, 12… O cadastro não reorganiza a escala já publicada.</p>
+      <div className="modal-header"><div><span className="eyebrow">CADASTRAR MILITARES NAS ALAS</span><h2>Confira cada militar</h2></div><button className="close-button" aria-label="Fechar" onClick={() => setPreview(null)} disabled={saveImport.isPending}>×</button></div>
+      <div className="wings-import-notice"><strong>As mudanças valerão para o próximo mês, a partir de {dateLabel(preview.effectiveMonth)}.</strong><p>Se esse mês já foi gerado, use Regerar nele para aplicar o cadastro.</p></div>
+      <div className="wings-import-application">
+        <label className="wings-import-toggle"><input type="checkbox" disabled={!preview.canApplyCurrentMonth || saveImport.isPending} checked={applyImportToCurrentMonth} onChange={(event) => setApplyImportToCurrentMonth(event.target.checked)} /><span>Aplicar também nesta escala, nas datas que ainda não passaram</span></label>
+        {applyImportToCurrentMonth && <><label>A partir de<input type="date" value={importFromDate} min={preview.applyFromDate} max={end} disabled={saveImport.isPending} onChange={(event) => setImportFromDate(event.target.value)} /></label><p>Os serviços ordinários dos militares cadastrados serão recalculados a partir dessa data. Extras e datas anteriores serão preservados.</p></>}
+        {!preview.canApplyCurrentMonth && <p>Esta escala já terminou. O cadastro será aplicado nas próximas gerações.</p>}
+      </div>
       {preview.unresolved.length > 0 && <div className="wings-import-notice"><strong>Precisam de conferência</strong>{preview.unresolved.map((item) => <p key={item.memberId}>{item.name}: {item.reason}</p>)}<p>Esses militares poderão ser incluídos manualmente depois do cadastro.</p></div>}
       <div className="table-wrap"><table><thead><tr><th>Militar</th><th>Ala</th><th>Posição</th><th></th></tr></thead><tbody>{preview.entries.map((item, index) => <tr key={item.memberId}>
         <td><strong>{item.name}</strong><small className="wing-table-note">{item.source === 'ESCALA' ? 'Identificado na escala' : 'Pelo ciclo ordinário anterior'}</small></td>
@@ -121,7 +129,7 @@ export default function Wings() {
       <label>Adicionar militar à conferência<select value="" onChange={(e) => { const member = members.find((item) => item.id === Number(e.target.value)); if (member) setPreview({ ...preview, entries: [...preview.entries,
         { memberId: member.id, name: name(member), wingId: wings[0].id, positionNumber: 1, source: 'MANUAL' }] }); }}><option value="">Selecione um militar</option>{members.filter((member) => !preview.entries.some((row) => row.memberId === member.id)).map((member) => <option value={member.id} key={member.id}>{name(member)}</option>)}</select></label>
       {saveImport.isError && <p className="error" role="alert">{saveImport.error.response?.data?.message || 'Não foi possível cadastrar as alas.'}</p>}
-      <div className="form-actions"><button disabled={!preview.entries.length || saveImport.isPending} onClick={() => saveImport.mutate()}>{saveImport.isPending ? 'Cadastrando…' : 'Confirmar cadastro das cinco alas'}</button><button className="secondary-button" disabled={saveImport.isPending} onClick={() => setPreview(null)}>Cancelar</button></div>
+      <div className="form-actions"><button disabled={!preview.entries.length || saveImport.isPending || (applyImportToCurrentMonth && (!importFromDate || importFromDate < preview.applyFromDate || importFromDate > end))} onClick={() => saveImport.mutate()}>{saveImport.isPending ? 'Cadastrando…' : applyImportToCurrentMonth ? 'Cadastrar e aplicar nesta escala' : 'Cadastrar para o próximo mês'}</button><button className="secondary-button" disabled={saveImport.isPending} onClick={() => setPreview(null)}>Cancelar</button></div>
     </section></div>}
     {editing && <div className="modal-backdrop"><section className="edit-modal wings-modal" role="dialog" aria-modal="true" aria-label="Trocar ala do militar">
       <div className="modal-header"><div><span className="eyebrow">TROCA DE ALA</span><h2>{name(members.find((member) => member.id === editing.memberId))}</h2></div><button className="close-button" aria-label="Fechar" disabled={move.isPending} onClick={() => setEditing(null)}>×</button></div>
