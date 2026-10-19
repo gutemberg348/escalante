@@ -92,7 +92,7 @@ export default function ScheduleManagement() {
         items: current.items.map((item) => item.id === slot.id ? { ...item, assignments: item.assignments.filter((assignment) => assignment.positionNumber !== position) } : item)
       } : current);
       setRemoving(null);
-      setMonthFeedback(`${dateLabel(slot.service_date)} · ${periodLabel(slot.period)} · ${position}ª posição: militar retirado. A vaga ficou aberta.`);
+      setMonthFeedback(`${dateLabel(slot.service_date)} · ${periodLabel(slot.period)} · ${position}ª coluna: militar retirado. A vaga ficou aberta.`);
       await refresh();
     }
   });
@@ -152,24 +152,23 @@ export default function ScheduleManagement() {
             <time dateTime={day.date}>{day.date.slice(8, 10)}<span>/{day.date.slice(5, 7)}</span></time>
             <span className="roster-date-detail"><strong>{new Date(`${day.date}T00:00`).toLocaleDateString('pt-BR', { weekday: 'long' })}</strong><span>{new Date(`${day.date}T00:00`).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })}</span></span>
           </h3>
-          <div className="roster-shifts">{['DIURNO', 'NOTURNO'].map((period) => {
+          <div className="roster-columns">{[1, 2, 3, 4].map((position) => <section className="roster-column" key={position} aria-label={`${position}ª coluna de ${dateLabel(day.date)}`}>
+            <h4 className="roster-column-title">{position}ª coluna</h4>
+            <div className="roster-column-shifts">{['DIURNO', 'NOTURNO'].map((period) => {
             const slot = day[period];
             if (!slot) return null;
             const isDay = period === 'DIURNO';
+            const assignment = slot.assignments?.find((item) => item.positionNumber === position);
+            const locked = position > Number(slot.current_capacity);
             return <section className={`roster-shift ${isDay ? 'roster-shift-day' : 'roster-shift-night'}`} key={slot.id} aria-label={`${dateLabel(day.date)} · ${periodLabel(period)}`}>
-              <div className="roster-shift-heading"><span className="roster-shift-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">{isDay ? <><circle cx="12" cy="12" r="4" /><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5" /></> : <path d="M20.8 13.2A9 9 0 0 1 10.8 3.1 9 9 0 1 0 20.8 13.2Z" />}</svg></span><h4>{isDay ? 'Dia' : 'Noite'}<span>{isDay ? '07h às 19h' : '19h às 07h do dia seguinte'}</span></h4></div>
-              <div className="roster-positions">
-              {[1, 2, 3, 4].map((position) => {
-                const assignment = slot.assignments?.find((item) => item.positionNumber === position);
-                const locked = position > Number(slot.current_capacity);
-                return <ScheduleCell key={position} slot={slot} position={position} assignment={assignment} locked={locked} editable={editable} actionPending={actionPending}
+              <div className="roster-shift-heading"><span className="roster-shift-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">{isDay ? <><circle cx="12" cy="12" r="4" /><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5" /></> : <path d="M20.8 13.2A9 9 0 0 1 10.8 3.1 9 9 0 1 0 20.8 13.2Z" />}</svg></span><h5>{isDay ? 'Dia' : 'Noite'}<span>{isDay ? '07h às 19h' : '19h às 07h'}{!isDay && <small>do dia seguinte</small>}</span></h5></div>
+              <ScheduleCell slot={slot} position={position} assignment={assignment} locked={locked} editable={editable} actionPending={actionPending}
                   onAdd={() => openEditor(slot, position)} onReplace={() => openEditor(slot, position, assignment)}
                   onMove={() => { setMoving({ slot, position, assignment }); setTarget(''); }} onRemove={() => removeAssignment(slot, position, assignment)}
-                  onToggleType={() => changeServiceType.mutate({ assignmentId: assignment.id, serviceType: assignment.serviceType === 'ORDINARY' ? 'EXTRAORDINARY' : 'ORDINARY' })} typePending={changeServiceType.isPending} />;
-              })}
-              </div>
+                  onToggleType={() => changeServiceType.mutate({ assignmentId: assignment.id, serviceType: assignment.serviceType === 'ORDINARY' ? 'EXTRAORDINARY' : 'ORDINARY' })} typePending={changeServiceType.isPending} />
             </section>;
-          })}</div>
+            })}</div>
+          </section>)}</div>
         </section>)}</div>
       {!days.length && <p className="empty-table">Não há horários preparados neste mês.</p>}
     </section>}
@@ -177,37 +176,36 @@ export default function ScheduleManagement() {
     {removing && <ConfirmationDialog title={`Retirar ${removing.assignment.rank} ${removing.assignment.operationalName}?`}
       pending={removePosition.isPending} pendingLabel="Retirando…" confirmLabel="Retirar desta vaga" onClose={() => setRemoving(null)}
       onConfirm={() => removePosition.mutate(removing)} error={removePosition.error ? removePosition.error.response?.data?.message || 'Não foi possível retirar o militar. Tente novamente.' : ''}>
-      <p className="confirmation-context">{schedule?.competency?.name}<br />{dateLabel(removing.slot.service_date)} · {periodLabel(removing.slot.period)}<br /><strong>{removing.position}ª posição · {removing.assignment.serviceType === 'ORDINARY' ? 'Ordinário' : 'Extra'}</strong></p>
-      <p>Somente esta marcação será retirada. A posição ficará vaga e os outros militares continuarão nas mesmas posições.</p>
+      <p className="confirmation-context">{schedule?.competency?.name}<br />{dateLabel(removing.slot.service_date)} · {periodLabel(removing.slot.period)}<br /><strong>{removing.position}ª coluna · {removing.assignment.serviceType === 'ORDINARY' ? 'Ordinário' : 'Extra'}</strong></p>
+      <p>Somente esta marcação será retirada. A coluna ficará vaga e os outros militares continuarão nas mesmas colunas.</p>
     </ConfirmationDialog>}
 
-    {editor && <div className="modal-backdrop" role="presentation"><section className="edit-modal schedule-action-modal" role="dialog" aria-modal="true" aria-label="Definir militar da vaga"><div className="modal-header"><div><span className="eyebrow">{editor.assignment ? 'TROCAR MILITAR' : 'PREENCHER VAGA'}</span><h2>{dateLabel(editor.slot.service_date)} · {periodLabel(editor.slot.period)} · Posição {editor.position}</h2></div><button className="close-button" onClick={() => setEditor(null)} aria-label="Fechar">×</button></div>
+    {editor && <div className="modal-backdrop" role="presentation"><section className="edit-modal schedule-action-modal" role="dialog" aria-modal="true" aria-label="Definir militar da vaga"><div className="modal-header"><div><span className="eyebrow">{editor.assignment ? 'TROCAR MILITAR' : 'PREENCHER VAGA'}</span><h2>{dateLabel(editor.slot.service_date)} · {periodLabel(editor.slot.period)} · Coluna {editor.position}</h2></div><button className="close-button" onClick={() => setEditor(null)} aria-label="Fechar">×</button></div>
       <p className="modal-copy">{editor.assignment ? `Substitui ${editor.assignment.rank} ${editor.assignment.operationalName}.` : 'Escolha um militar ativo e autorizado para confirmar nesta vaga.'}</p>
       <div className="schedule-editor-fields"><label>Militar<select autoFocus value={selectedMemberId} onChange={(event) => setSelectedMemberId(event.target.value)}><option value="">Selecione um militar</option>{eligibleMembers.map((member) => <option value={member.id} key={member.id}>{fullName(member)} · {member.monthly_hours || 0}h</option>)}</select></label><label>Tipo do serviço<select value={selectedServiceType} onChange={(event) => setSelectedServiceType(event.target.value)}><option value="ORDINARY">Ordinário</option><option value="EXTRAORDINARY">Extra</option></select></label></div>
       <div className="form-actions"><button type="button" className="secondary-button" onClick={() => setEditor(null)}>Cancelar</button><button type="button" disabled={!selectedMemberId || savePosition.isPending} onClick={submitEditor}>{savePosition.isPending ? 'Salvando…' : editor.assignment ? 'Trocar militar' : 'Confirmar militar'}</button></div>
     </section></div>}
 
-    {moving && <div className="modal-backdrop" role="presentation"><section className="edit-modal schedule-action-modal" role="dialog" aria-modal="true" aria-label="Mover ou trocar posição"><div className="modal-header"><div><span className="eyebrow">MOVER OU TROCAR POSIÇÃO</span><h2>{moving.assignment.rank} {moving.assignment.operationalName}</h2></div><button className="close-button" onClick={() => setMoving(null)} aria-label="Fechar">×</button></div>
-      <p className="modal-copy">Origem: {dateLabel(moving.slot.service_date)} · {periodLabel(moving.slot.period)} · posição {moving.position}. Se o destino estiver ocupado, os dois militares trocarão de posição.</p>
-      <label>Posição de destino<select autoFocus value={target} onChange={(event) => setTarget(event.target.value)}><option value="">Selecione uma posição</option>{destinations.filter(({ slot, position }) => slot.id !== moving.slot.id || position !== moving.position).map(({ slot, position, assignment }) => <option value={`${slot.id}:${position}`} key={`${slot.id}:${position}`}>{dateLabel(slot.service_date)} · {periodLabel(slot.period)} · posição {position} · {assignment ? `trocar com ${assignment.rank} ${assignment.operationalName}` : 'vaga livre'}</option>)}</select></label>
-      <div className="form-actions"><button type="button" className="secondary-button" onClick={() => setMoving(null)}>Cancelar</button><button type="button" disabled={!target || moveAssignment.isPending} onClick={() => { const [targetSlotId, targetPosition] = target.split(':').map(Number); moveAssignment.mutate({ assignmentId: moving.assignment.id, targetSlotId, targetPosition }); }}>{moveAssignment.isPending ? 'Salvando…' : selectedDestination?.assignment ? 'Trocar posições' : 'Mover para vaga'}</button></div>
+    {moving && <div className="modal-backdrop" role="presentation"><section className="edit-modal schedule-action-modal" role="dialog" aria-modal="true" aria-label="Mover ou trocar coluna"><div className="modal-header"><div><span className="eyebrow">MOVER OU TROCAR POSIÇÃO</span><h2>{moving.assignment.rank} {moving.assignment.operationalName}</h2></div><button className="close-button" onClick={() => setMoving(null)} aria-label="Fechar">×</button></div>
+      <p className="modal-copy">Origem: {dateLabel(moving.slot.service_date)} · {periodLabel(moving.slot.period)} · coluna {moving.position}. Se o destino estiver ocupado, os dois militares trocarão de coluna.</p>
+      <label>Coluna de destino<select autoFocus value={target} onChange={(event) => setTarget(event.target.value)}><option value="">Selecione uma coluna</option>{destinations.filter(({ slot, position }) => slot.id !== moving.slot.id || position !== moving.position).map(({ slot, position, assignment }) => <option value={`${slot.id}:${position}`} key={`${slot.id}:${position}`}>{dateLabel(slot.service_date)} · {periodLabel(slot.period)} · coluna {position} · {assignment ? `trocar com ${assignment.rank} ${assignment.operationalName}` : 'vaga livre'}</option>)}</select></label>
+      <div className="form-actions"><button type="button" className="secondary-button" onClick={() => setMoving(null)}>Cancelar</button><button type="button" disabled={!target || moveAssignment.isPending} onClick={() => { const [targetSlotId, targetPosition] = target.split(':').map(Number); moveAssignment.mutate({ assignmentId: moving.assignment.id, targetSlotId, targetPosition }); }}>{moveAssignment.isPending ? 'Salvando…' : selectedDestination?.assignment ? 'Trocar colunas' : 'Mover para vaga'}</button></div>
     </section></div>}
   </>;
 }
 
 function ScheduleCell({ slot, position, assignment, locked, editable, onAdd, onReplace, onMove, onRemove, onToggleType, typePending, actionPending }) {
-  const positionLabel = <span className="roster-position-label">{position}ª posição</span>;
-  if (locked) return <div className="roster-position is-locked">{positionLabel}<strong>Trancada</strong><span className="roster-position-note">Coluna fechada</span></div>;
-  if (!assignment) return <div className="roster-position is-vacant">{positionLabel}<strong>Vaga livre</strong>{editable && <button type="button" className="roster-action roster-add" disabled={actionPending} onClick={onAdd}>+ Adicionar militar</button>}</div>;
+  if (locked) return <div className="roster-position is-locked"><strong>Trancada</strong></div>;
+  if (!assignment) return <div className="roster-position is-vacant"><strong>Vaga livre</strong>{editable && <button type="button" className="roster-action roster-add" disabled={actionPending} onClick={onAdd}>+ Adicionar</button>}</div>;
   const extraAssignment = assignment.serviceType === 'EXTRAORDINARY';
   return <div className={`roster-position is-occupied ${extraAssignment ? 'is-extra' : ''}`}>
-    <div className="roster-position-heading">{positionLabel}<span className={`roster-service-type ${extraAssignment ? 'is-extra' : ''}`}>{extraAssignment ? 'Extra' : 'Ordinário'}</span></div>
+    <div className="roster-position-heading"><span className={`roster-service-type ${extraAssignment ? 'is-extra' : ''}`}>{extraAssignment ? 'Extra' : 'Ordinário'}</span></div>
     <strong className="roster-member-name">{assignment.rank} {assignment.operationalName}{assignment.displayPrefix ? ` (${assignment.displayPrefix})` : ''}</strong>
     {editable && <div className="roster-actions">
-      <button type="button" className="roster-action roster-replace" disabled={actionPending} onClick={onReplace}>Trocar militar</button>
-      <button type="button" className="roster-action" disabled={actionPending} onClick={onMove}>Mover posição</button>
+      <button type="button" className="roster-action roster-replace" disabled={actionPending} aria-label={`Trocar militar da ${position}ª coluna, ${periodLabel(slot.period)}, ${dateLabel(slot.service_date)}`} onClick={onReplace}>Trocar</button>
+      <button type="button" className="roster-action" disabled={actionPending} onClick={onMove}>Mover</button>
       <button type="button" className="roster-action" disabled={typePending || actionPending} onClick={onToggleType}>Mudar tipo</button>
-      <button type="button" className="roster-action roster-remove" disabled={actionPending} aria-label={`Retirar ${assignment.rank} ${assignment.operationalName} da ${position}ª posição de ${dateLabel(slot.service_date)}, ${slot.period === 'DIURNO' ? 'dia' : 'noite'}`} onClick={onRemove}>Retirar</button>
+      <button type="button" className="roster-action roster-remove" disabled={actionPending} aria-label={`Retirar ${assignment.rank} ${assignment.operationalName} da ${position}ª coluna de ${dateLabel(slot.service_date)}, ${slot.period === 'DIURNO' ? 'dia' : 'noite'}`} onClick={onRemove}>Retirar</button>
     </div>}
   </div>;
 }
