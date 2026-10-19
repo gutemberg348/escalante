@@ -122,6 +122,55 @@ test('import saves the roster without changing the existing scale or extras', as
 const editedRoster = () => [memberEntry(1, 2), memberEntry(2, 1), ...[3, 4, 5].map((member) => memberEntry(member, member))];
 const savedAssignments = () => db.prepare('SELECT * FROM assignments ORDER BY id').all();
 
+function rosterWithOldPositionConflict() {
+  // One member is inferred from the published scale, the other from an old
+  // rotation. The operator fixes the latter to position 2 in the preview.
+  db.prepare(`INSERT INTO ordinary_rotations (member_id,position_number,anchor_date,active,created_at,updated_at)
+    VALUES (6,1,'2031-07-05',1,?,?)`).run(stamp, stamp);
+  return previewWingImport(competency).entries.map((row) => row.memberId === 6 ? { ...row, positionNumber: 2 } : row);
+}
+
+for (const applyToCurrentMonth of [false, true]) {
+  test(`corrected preview positions ignore the old rotation conflict (apply current: ${applyToCurrentMonth})`, async () => {
+    const entries = rosterWithOldPositionConflict();
+    assignment(6, '2031-07-07', 'DIURNO', 'EXTRAORDINARY', 2);
+    const before = savedAssignments();
+    const result = await request('/import', { competencyId: competency.id, entries, applyToCurrentMonth, fromDate: '2031-07-10' });
+    assert.equal(result.status, 200, JSON.stringify(result.data));
+    for (const row of before) assert.deepEqual(db.prepare('SELECT * FROM assignments WHERE id=?').get(row.id), row);
+    if (!applyToCurrentMonth) assert.deepEqual(savedAssignments(), before);
+    else {
+      assert.deepEqual(memberDates(6), ['2031-07-10', '2031-07-15', '2031-07-20', '2031-07-25', '2031-07-30']);
+      assert.deepEqual(db.prepare("SELECT DISTINCT position_number FROM assignments WHERE member_id=6 AND service_type='ORDINARY'").all(), [{ position_number: 2 }]);
+    }
+    const next = ensureCompetencySchedule('2031-08-01').competency;
+    const roster = membershipsForMonth(next);
+    assert.equal(roster.find((row) => row.member_id === 5).position_number, 1);
+    assert.equal(roster.find((row) => row.member_id === 6).position_number, 2);
+    generateOrdinaryAssignments({ competencyId: next.id });
+    assert.deepEqual(memberDates(6, next.id), memberDates(5, next.id));
+  });
+}
+
+test('a real duplicate position in the submitted preview remains blocked', async () => {
+  rosterWithOldPositionConflict();
+  const before = savedAssignments();
+  const result = await request('/import', { competencyId: competency.id, entries: previewWingImport(competency).entries });
+  assert.equal(result.status, 409);
+  assert.deepEqual(savedAssignments(), before);
+  assert.equal(db.prepare('SELECT COUNT(*) total FROM wing_memberships').get().total, 0);
+});
+
+test('a later current-month move does not revalidate untouched historical conflicts', async () => {
+  const result = await request('/import', { competencyId: competency.id, entries: rosterWithOldPositionConflict() });
+  assert.equal(result.status, 200, JSON.stringify(result.data));
+  const before = savedAssignments();
+  const move = await request('/move', { competencyId: competency.id, scope: 'THIS_MONTH', fromDate: '2031-07-10', entries: [memberEntry(6, 5, 2)] });
+  assert.equal(move.status, 200, JSON.stringify(move.data));
+  for (const row of before) assert.deepEqual(db.prepare('SELECT * FROM assignments WHERE id=?').get(row.id), row);
+  assert.equal(membershipsForMonth(competency).find((row) => row.member_id === 6).position_number, 2);
+});
+
 test('edited initial roster starts next month and keeps the original current baseline', async () => {
   const before = savedAssignments();
   const result = await request('/import', { competencyId: competency.id, entries: editedRoster() });

@@ -38,12 +38,13 @@ function validateEntries(entries) {
   }
 }
 
-function validateRoster(competency) {
+function validateRoster(competency, fromDate = monthStart(competency)) {
   const occupied = new Map();
   for (const row of wingAnchorsForMonth(competency)) {
     let date = dayjs(row.last_service_date).add(5, 'day');
     for (; date.format('YYYY-MM-DD') <= dayjs(monthStart(competency)).endOf('month').format('YYYY-MM-DD'); date = date.add(5, 'day')) {
       const dateKey = date.format('YYYY-MM-DD');
+      if (dateKey < fromDate) continue;
       if ((row.from_date && dateKey < row.from_date) || (row.until_date && dateKey > row.until_date)) continue;
       const key = `${dateKey}:${row.position_number}`;
       if (occupied.has(key) && occupied.get(key) !== row.member_id) {
@@ -115,9 +116,9 @@ router.post('/import', allow('ADMIN', 'SCHEDULER'), handle((req, res) => {
     validateRoster(future);
     if (input.applyToCurrentMonth) {
       for (const item of input.entries) setCurrentWingEntry(competency, item, fromDate, req.user.id);
-    }
-    validateRoster(competency);
-    if (input.applyToCurrentMonth) {
+      // The inferred historical baseline is not being rewritten. Validate only
+      // the dates receiving the confirmed choices, not old rotation conflicts.
+      validateRoster(competency, fromDate);
       generation = generateChangedMembers(competency, input.entries, fromDate, req.user.id, 'Cadastro das alas aplicado nas datas restantes da escala');
       audit({ userId: req.user.id, action: 'APPLY_WING_ROSTER_CURRENT_MONTH', entityType: 'COMPETENCY', entityId: competency.id,
         after: { entries: input.entries, fromDate }, reason: 'Aplicação solicitada no cadastro das alas, preservando extras e datas anteriores' });
@@ -166,8 +167,8 @@ router.post('/move', allow('ADMIN', 'SCHEDULER'), handle((req, res) => {
         setCurrentWingEntry(competency, item, fromDate, req.user.id);
       }
     }
-    validateRoster(target);
     if (input.scope === 'NEXT_MONTH') {
+      validateRoster(target);
       validateRoster({ ...target, id: -1 });
       // Uma troca futura também deve respeitar outras mudanças já programadas.
       const futureMonths = db.prepare('SELECT DISTINCT effective_month FROM wing_memberships WHERE effective_month>?').all(monthStart(target));
@@ -177,7 +178,7 @@ router.post('/move', allow('ADMIN', 'SCHEDULER'), handle((req, res) => {
       }
     }
     if (applyCurrent) {
-      validateRoster(competency);
+      validateRoster(competency, fromDate);
       generation = generateChangedMembers(competency, input.entries, fromDate, req.user.id, 'Remanejamento de ala nas datas restantes do mês');
     }
     audit({ userId: req.user.id, action: 'MOVE_WING_MEMBERS', entityType: 'COMPETENCY', entityId: competency.id,
