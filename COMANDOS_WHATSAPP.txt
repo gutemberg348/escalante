@@ -405,11 +405,19 @@ Isso não gera nem apaga escalas. Você ainda pode selecionar outro mês manualm
 Somente administradores selecionados no painel WhatsApp podem gerar e confirmar.
 
    /gerar-proximo-mes
+   @Escalante gerar próximo mês
    @Escalante gerar escala do próximo mês
 
-O bot mostra o aviso antes de gerar. Para confirmar:
+O bot pergunta: "Posso gerar a escala de [mês/ano] e enviar o PDF?"
+O mesmo administrador que fez o pedido responde no mesmo grupo:
 
-   /confirmar-gerar-proximo-mes
+   SIM
+   ou NÃO para cancelar.
+
+Pode responder diretamente à pergunta do bot ou enviar SIM no grupo enquanto
+a pergunta estiver pendente. A confirmação vale por 5 minutos. Não precisa
+digitar /confirmar-gerar-proximo-mes. Respostas repetidas não geram outro mês.
+Confira o mês informado: se o próximo mês já foi gerado, o bot oferece o seguinte.
 
 O novo mês é gerado com o ciclo ordinário 1x4 e o PDF é publicado. A fila não
 começa automaticamente; envie o comando de início com a data e a coluna.

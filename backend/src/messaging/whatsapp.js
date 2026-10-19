@@ -13,7 +13,7 @@ import { regenerateOrdinaryAssignments } from '../scheduling/monthly.js';
 export { parseNaturalChoices } from './marking-choices.js';
 
 const authDirectory = path.resolve(path.dirname(env.DATABASE_PATH), 'whatsapp-auth');
-const commandHandlerVersion = 'mentions-v13-panel-administrators';
+const commandHandlerVersion = 'mentions-v14-month-generation-confirmation';
 const commandMonthContext = new AsyncLocalStorage();
 const connection = {
   socket: null, saveCreds: null, status: 'DISCONNECTED', qrDataUrl: null, qrIssued: false,
@@ -825,6 +825,14 @@ export async function handleIncomingMessages(socket, { messages }) {
     // Aprende silenciosamente o vínculo PN/LID dos participantes. Mensagens comuns
     // continuam sem interpretação e sem resposta até alguém chamar o bot.
     const originalIdentity = resolveMemberIdentity(message.key);
+    const generationAnswer = await handleMonthGenerationAnswer(socket, message, body, originalIdentity);
+    if (generationAnswer.handled) {
+      if (generationAnswer.text) {
+        const sent = await socket.sendMessage(remoteJid, { text: generationAnswer.text }, { quoted: message });
+        logOutboundMessage(socket, sent, remoteJid, generationAnswer.text);
+      }
+      continue;
+    }
     if (!isAddressedToBot(socket, message, body)) continue;
     const directText = withoutBotMention(body);
     const directMultilineText = withoutBotMentionPreservingLines(body);
@@ -895,6 +903,7 @@ export async function handleIncomingMessages(socket, { messages }) {
           requiresTarget: !quotedRequest && (directTarget.required || Boolean(quotedTargetIdentity)),
           groupAdministrator,
           panelAdministrator,
+          actorMemberId: actorIdentity.member?.id,
           groupJid: remoteJid
         })
       : quotedRequest
@@ -903,6 +912,12 @@ export async function handleIncomingMessages(socket, { messages }) {
     if (reply?.type === 'TEXT') {
       const sent = await socket.sendMessage(remoteJid, { text: reply.text, mentions: reply.mentions ?? [] }, { quoted: message });
       logOutboundMessage(socket, sent, remoteJid, reply.text);
+      if (reply.monthGenerationRequest && sent?.key?.id) {
+        const request = reply.monthGenerationRequest;
+        writeSetting(monthGenerationKey(remoteJid, request.memberId), JSON.stringify({
+          target: request.target, promptId: sent.key.id, expiresAt: Date.now() + 5 * 60 * 1000
+        }), null);
+      }
       if (reply.pdf) {
         const document = await socket.sendMessage(remoteJid, {
           document: reply.pdf.buffer,
@@ -1096,7 +1111,7 @@ Outros atalhos:
 */minhas mês 11* e */vagas novembro* - consultam o mês informado
 "Próximo mês" segue a data atual; mês sem ano usa o ano selecionado. Na virada do mês, uma seleção antiga avança automaticamente.
 */gerar-proximo-mes* - mostra o aviso antes de gerar (administrador configurado no painel WhatsApp)
-*/confirmar-gerar-proximo-mes* - confirma a geração e publica o PDF (administrador configurado no painel WhatsApp)
+Responda *SIM* à pergunta do bot para gerar e publicar o PDF, ou *NÃO* para cancelar.
 */cancelar 125* - cancela uma marcação
 */passo a vez* - não marca nesta rodada
 
@@ -1154,21 +1169,65 @@ async function activateCompetencyFromGroup(selector, member) {
   };
 }
 
-async function generateNextMonthFromGroup() {
+let monthGenerationRunning = false;
+async function generateNextMonthFromGroup(expectedTarget) {
   const { sendMonthlyOpening } = await import('./automation.js');
-  const result = await sendMonthlyOpening({ force: true, advance: true });
+  if (monthGenerationRunning) return 'Já existe uma geração em andamento. Aguarde o PDF antes de fazer outro pedido.';
+  if (nextMonthGenerationTarget().format('YYYY-MM') !== expectedTarget) return 'O próximo mês disponível mudou. Peça para gerar novamente e confira o mês antes de responder SIM.';
+  monthGenerationRunning = true;
+  let result;
+  try { result = await sendMonthlyOpening({ force: true, advance: true }); }
+  finally { monthGenerationRunning = false; }
   if (!result.sent) return result.reason || 'Não foi possível gerar o próximo mês.';
   const generation = result.generation;
   return `*PRÓXIMO MÊS GERADO*\n\n*${result.competency.name}*\n${generation.ordinaryDutyDays} serviços ordinários programados no ciclo 1x4.\n${generation.assignmentsCreated} turnos ordinários novos.\n${generation.skippedMembers.length} integrantes ignorados por situação ou autorização.\n${generation.unavailableDays.length} serviços não preenchidos por indisponibilidade.\n${generation.conflictDays.length} conflitos para revisão no painel.\n\nO PDF foi publicado no grupo. As marcações restantes serão extras.`;
 }
 
-function nextMonthGenerationWarning() {
+function nextMonthGenerationTarget() {
   const latest = db.prepare('SELECT year,month FROM competencies WHERE generated_at IS NOT NULL ORDER BY year DESC,month DESC LIMIT 1').get();
   const current = dayjs().startOf('month');
   const latestDate = latest ? dayjs(`${latest.year}-${String(latest.month).padStart(2, '0')}-01`) : current;
-  const target = (latestDate.isAfter(current, 'month') ? latestDate : current).add(1, 'month');
+  return (latestDate.isAfter(current, 'month') ? latestDate : current).add(1, 'month');
+}
+
+const monthGenerationKey = (groupJid, memberId) => `bot_pending_month_generation:${groupJid}:${memberId}`;
+
+async function handleMonthGenerationAnswer(socket, message, body, originalIdentity) {
+  const answer = withoutBotMention(body).trim().replace(/^\/+/, '').toUpperCase().normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '').replace(/[!?.]+$/g, '').trim();
+  const yes = ['SIM', 'PODE GERAR', 'SIM PODE GERAR', 'PODE SIM', 'CONFIRMAR-GERAR-PROXIMO-MES'].includes(answer);
+  if (!yes && !['NAO', 'CANCELAR', 'NAO GERAR'].includes(answer)) return { handled: false };
+  const identity = originalIdentity.member ? originalIdentity : await resolveMemberIdentityWithMapping(socket, message.key);
+  if (!identity.member) return { handled: false };
+  const key = monthGenerationKey(message.key.remoteJid, identity.member.id);
+  let pending;
+  try { pending = JSON.parse(readSetting(key) || 'null'); } catch { return { handled: false }; }
+  if (!pending) return { handled: false };
+  const context = messageContextInfo(message);
+  // An answer to another message must not confirm this request.
+  if (context?.stanzaId && context.stanzaId !== pending.promptId) return { handled: false };
+  const processed = db.prepare('INSERT OR IGNORE INTO processed_messages (message_id,sender_jid,received_at,processed_at) VALUES (?,?,?,?)')
+    .run(message.key.id, identity.senderJid, now(), now());
+  if (!processed.changes) return { handled: true };
+  db.prepare('INSERT OR IGNORE INTO whatsapp_messages (message_id,remote_jid,sender_jid,direction,body,created_at) VALUES (?,?,?,?,?,?)')
+    .run(message.key.id, message.key.remoteJid, identity.senderJid, 'INBOUND', body.slice(0, 2000), now());
+  // Consume before any asynchronous generation: repeats cannot advance another month.
+  writeSetting(key, '', null);
+  if (!isConfiguredAdministrator(identity.member)) return { handled: true, text: 'Somente administradores configurados no painel WhatsApp podem gerar a escala.' };
+  if (!Number.isFinite(pending.expiresAt) || Date.now() > pending.expiresAt) return { handled: true, text: 'Essa pergunta expirou. Peça para gerar a escala novamente.' };
+  if (!yes) return { handled: true, text: 'Geração cancelada. Nenhuma escala foi alterada.' };
+  try { return { handled: true, text: await generateNextMonthFromGroup(pending.target) }; }
+  catch (error) {
+    console.error('Falha ao gerar/publicar o próximo mês:', error);
+    return { handled: true, text: 'Não consegui concluir a geração ou o envio do PDF. Confira /meses e /escala antes de pedir outra geração.' };
+  }
+}
+
+function nextMonthGenerationWarning(memberId) {
+  const target = nextMonthGenerationTarget();
   const monthName = commandMonthNames[target.month()];
-  return `⚠️ *CONFIRMAR GERAÇÃO DO PRÓXIMO MÊS*\n\nSerá criada a escala de *${monthName} de ${target.year()}* com o ciclo ordinário 1x4.\n\n• O mês atual não será apagado.\n• O novo PDF será publicado nos grupos.\n• O novo mês passará a ser usado pelo comando /escala.\n• A fila de marcação poderá ser iniciada.\n\nPara continuar, envie exatamente:\n*/confirmar-gerar-proximo-mes*\n\nPara desistir, não envie a confirmação.`;
+  return { type: 'TEXT', text: `*GERAR ESCALA*\n\nPosso gerar a escala de *${monthName} de ${target.year()}* e enviar o PDF?\n\nO mês atual será preservado. O novo mês ficará selecionado no WhatsApp.\n\nResponda *SIM* para gerar ou *NÃO* para cancelar. Essa pergunta vale por 5 minutos.`,
+    monthGenerationRequest: { memberId, target: target.format('YYYY-MM') } };
 }
 
 const normalizeRosterLabel = (value) => normalizeMentionLabel(value).replace(/[^A-Z0-9]+/g, ' ').trim();
@@ -1252,7 +1311,7 @@ async function saveAndStartMarkingSchedulePlan(plan, requestedBy) {
   return `*CRONOGRAMA INICIADO*\n${competency.name} — ${plan.column}ª coluna.`;
 }
 
-async function executeCommand(member, rawBody, { explicitSlash = false, targetMember = null, requiresTarget = false, groupAdministrator = false, panelAdministrator = false, groupJid = null } = {}) {
+async function executeCommand(member, rawBody, { explicitSlash = false, targetMember = null, requiresTarget = false, groupAdministrator = false, panelAdministrator = false, actorMemberId = null, groupJid = null } = {}) {
   if (requiresTarget && !targetMember) return 'Não identifiquei o militar marcado. Nenhuma marcação foi feita.';
   const commandBody = rawBody.trim().replace(/^\/+/, '').trim();
   const decoratedRequest = extractDisplayPrefix(commandBody);
@@ -1285,7 +1344,7 @@ async function executeCommand(member, rawBody, { explicitSlash = false, targetMe
     const request = resolveRequestedMonth(commandBody);
     if (request.error) return request.error;
     if (request.requested) return commandMonthContext.run(request, () => executeCommand(member, request.text, {
-      explicitSlash, targetMember, requiresTarget, groupAdministrator, panelAdministrator, groupJid
+      explicitSlash, targetMember, requiresTarget, groupAdministrator, panelAdministrator, actorMemberId, groupJid
     }));
   }
   const isPermutaNote = ['PERMUTA', 'PERMUTAR', 'PERMUTE'].includes(command);
@@ -1352,11 +1411,11 @@ async function executeCommand(member, rawBody, { explicitSlash = false, targetMe
   }
   if (command === 'CONFIRMAR-GERAR-PROXIMO-MES') {
     if (!panelAdministrator) return 'Somente administradores configurados no painel WhatsApp podem gerar a escala.';
-    return generateNextMonthFromGroup();
+    return 'Peça *@Escalante gerar próximo mês* e responda *SIM* à pergunta do bot.';
   }
-  if (command === 'GERAR-PROXIMO-MES' || /^(?:GERAR|CRIAR)\s+(?:(?:A|O)\s+)?(?:LISTA|ESCALA)(?:\s+DO)?\s+PROXIMO\s+MES$/.test(normalized)) {
+  if (command === 'GERAR-PROXIMO-MES' || /^(?:GERAR|CRIAR)\s+(?:(?:A|O)\s+)?(?:(?:LISTA|ESCALA)\s+(?:DO\s+)?)?PROXIMO\s+MES$/.test(normalized)) {
     if (!panelAdministrator) return 'Somente administradores configurados no painel WhatsApp podem gerar a escala.';
-    return nextMonthGenerationWarning();
+    return nextMonthGenerationWarning(actorMemberId ?? member.id);
   }
   if (command === 'STATUS' || /\bMEU STATUS\b/.test(normalized)) return `*${member.rank} ${member.operational_name}*\nSituação: ${operationalLabel[member.operational_status] ?? member.operational_status}\nAutorização: ${authorizationLabel[member.authorization_status] ?? member.authorization_status}`;
   const markingScheduleRequest = parseMarkingScheduleCommand(normalized);

@@ -61,6 +61,7 @@ beforeEach(() => {
   setting.run('whatsapp_admin_member_ids', '[]', stamp);
   setting.run('bot_marking_round_starts_at', '', stamp);
   setting.run('bot_pending_vacation_confirmation', '', stamp);
+  db.prepare("DELETE FROM system_settings WHERE key LIKE 'bot_pending_month_generation:%'").run();
   replies = [];
   socket = {
     user: { id: bot, lid: '212000000000001@lid' },
@@ -1235,10 +1236,104 @@ test('a configured administrator identified by LID can open columns without bein
 test('configured administrators can request generation and normal members can still consult the PDF', async () => {
   setting.run('whatsapp_admin_member_ids', '[1]', stamp);
   await receive('/gerar-proximo-mes', []);
-  assert.match(replies.at(-1).text, /CONFIRMAR GERAÇÃO/);
+  assert.match(replies.at(-1).text, /Posso gerar a escala/);
   setting.run('whatsapp_admin_member_ids', '[]', stamp);
   await receive('/escala', []);
   assert.ok(replies.at(-1).document);
   await receive('/marcar dia 20 noite', []);
   assert.match(replies.at(-1).text, /confirmado/);
+});
+
+const generationPendingKey = `bot_pending_month_generation:${group}:1`;
+const generationPending = () => JSON.parse(db.prepare('SELECT value FROM system_settings WHERE key=?').get(generationPendingKey)?.value || 'null');
+async function askToGenerate() {
+  setting.run('whatsapp_admin_member_ids', '[1]', stamp);
+  await receive('@Escalante gerar próximo mês', [bot]);
+  assert.match(replies.at(-1).text, /Posso gerar a escala/);
+  assert.match(replies.at(-1).text, /SIM/);
+  assert.doesNotMatch(replies.at(-1).text, /confirmar-gerar-proximo-mes/);
+  return generationPending();
+}
+
+test('a plain SIM consumes only the requesting admin pending generation', async () => {
+  const count = db.prepare('SELECT COUNT(*) n FROM competencies').get().n;
+  await askToGenerate();
+  assert.ok(generationPending()?.promptId);
+  await receive('sim', []);
+  // This socket is deliberately not connected to WhatsApp. Reaching this
+  // message verifies dispatch to the real generator without publishing a PDF.
+  assert.match(replies.at(-1).text, /WhatsApp desconectado/);
+  assert.equal(generationPending(), null);
+  const replyCount = replies.length;
+  await receive('sim', []);
+  assert.equal(replies.length, replyCount);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM competencies').get().n, count);
+});
+
+test('replying SIM to the bot question confirms without the old slash command', async () => {
+  const pending = await askToGenerate();
+  await receive('SIM!', [], { participant: bot, stanzaId: pending.promptId, quotedMessage: { conversation: replies.at(-1).text } });
+  assert.match(replies.at(-1).text, /WhatsApp desconectado/);
+  assert.equal(generationPending(), null);
+});
+
+test('NAO cancels generation and leaves the schedule untouched', async () => {
+  await askToGenerate();
+  const before = db.prepare('SELECT * FROM competencies ORDER BY id').all();
+  await receive('não', []);
+  assert.match(replies.at(-1).text, /Geração cancelada/);
+  assert.equal(generationPending(), null);
+  assert.deepEqual(db.prepare('SELECT * FROM competencies ORDER BY id').all(), before);
+});
+
+test('confirmation is scoped to the actual sender and configured group', async () => {
+  const pending = await askToGenerate();
+  setting.run('whatsapp_admin_member_ids', '[1,18]', stamp);
+  await handleIncomingMessages(socket, { messages: [{ key: { id: `in-${++sequence}`, remoteJid: group, participant: alex },
+    message: { extendedTextMessage: { text: 'sim', contextInfo: { participant: bot, stanzaId: pending.promptId } } } }] });
+  assert.deepEqual(generationPending(), pending);
+  const otherGroup = '120000000000099@g.us';
+  setting.run('whatsapp_group_jids', JSON.stringify([group, otherGroup]), stamp);
+  try {
+    await handleIncomingMessages(socket, { messages: [{ key: { id: `in-${++sequence}`, remoteJid: otherGroup, participant: sender }, message: { conversation: 'sim' } }] });
+    assert.deepEqual(generationPending(), pending);
+  } finally { setting.run('whatsapp_group_jids', JSON.stringify([group]), stamp); }
+});
+
+test('replying to another message cannot confirm a pending generation', async () => {
+  const pending = await askToGenerate();
+  await receive('sim', [], { participant: bot, stanzaId: 'some-other-question' });
+  assert.deepEqual(generationPending(), pending);
+  assert.doesNotMatch(replies.at(-1).text, /WhatsApp desconectado/);
+});
+
+test('expired or revoked generation confirmations never execute', async () => {
+  const pending = await askToGenerate();
+  setting.run(generationPendingKey, JSON.stringify({ ...pending, expiresAt: Date.now() - 1 }), stamp);
+  await receive('sim', []);
+  assert.match(replies.at(-1).text, /expirou/);
+  await askToGenerate();
+  setting.run('whatsapp_admin_member_ids', '[]', stamp);
+  await receive('sim', []);
+  assert.match(replies.at(-1).text, /administradores configurados/);
+  assert.equal(generationPending(), null);
+});
+
+test('a stale target cannot silently generate a different month', async () => {
+  const pending = await askToGenerate();
+  setting.run(generationPendingKey, JSON.stringify({ ...pending, target: '2000-01' }), stamp);
+  await receive('sim', []);
+  assert.match(replies.at(-1).text, /próximo mês disponível mudou/);
+  assert.equal(generationPending(), null);
+});
+
+test('the legacy confirm command requires a pending question and duplicate delivery is ignored', async () => {
+  setting.run('whatsapp_admin_member_ids', '[1]', stamp);
+  await receive('/confirmar-gerar-proximo-mes', []);
+  assert.match(replies.at(-1).text, /responda \*SIM\*/);
+  await askToGenerate();
+  const message = { key: { id: `in-${++sequence}`, remoteJid: group, participant: sender }, message: { conversation: '/confirmar-gerar-proximo-mes' } };
+  await handleIncomingMessages(socket, { messages: [message, message] });
+  assert.match(replies.at(-1).text, /WhatsApp desconectado/);
+  assert.equal(generationPending(), null);
 });
