@@ -35,6 +35,8 @@ Ao confirmar, somente o mês escolhido é processado. A tela abre esse mês e ba
 
 No WhatsApp, **@Escalante gerar próximo mês** também usa o próximo mês do calendário. Se ele já existir, o bot avisa que irá regerar os ordinários. O administrador responde **SIM** ou **NÃO** à pergunta curta. Regerar preserva extras e colunas; o pedido nunca pula para o mês seguinte só porque a escala já existe.
 
+O PDF dessa geração ou regeneração é enviado somente no grupo em que o pedido foi confirmado. Os outros grupos podem consultar a mesma escala com **/escala** ou **@Escalante escala do próximo mês**, recebendo o PDF apenas no grupo que pediu.
+
 ## Excluir um mês
 
 Em **Gerenciar escala** ou **Gestão do mês**, selecione a competência e clique em **Excluir mês**. A confirmação mostra o nome do mês e a quantidade de ordinários e extras que serão removidos. Administradores e escalantes podem confirmar a exclusão.

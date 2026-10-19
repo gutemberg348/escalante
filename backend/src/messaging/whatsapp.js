@@ -8,6 +8,7 @@ import { audit, db, now } from '../database/index.js';
 import { buildSchedulePdf } from './schedule-pdf.js';
 import { parseMarkingRequest } from './marking-choices.js';
 import { parseRequestedMonth } from './month-selector.js';
+import { sendGroupDocument } from './whatsapp-delivery.js';
 import { applyVacationToCompetency } from '../scheduling/member-status.js';
 import { regenerateOrdinaryAssignments, previewMonthGeneration } from '../scheduling/monthly.js';
 export { parseNaturalChoices } from './marking-choices.js';
@@ -1170,7 +1171,7 @@ async function activateCompetencyFromGroup(selector, member) {
 }
 
 let monthGenerationRunning = false;
-async function generateNextMonthFromGroup(expectedTarget, expectedAction) {
+async function generateNextMonthFromGroup(expectedTarget, expectedAction, groupJid) {
   const { sendMonthlyOpening } = await import('./automation.js');
   if (monthGenerationRunning) return 'Já existe uma geração em andamento. Aguarde o PDF antes de fazer outro pedido.';
   const target = nextMonthGenerationTarget();
@@ -1179,7 +1180,7 @@ async function generateNextMonthFromGroup(expectedTarget, expectedAction) {
   if (preview.action !== expectedAction) return 'A escala mudou desde a pergunta. Peça para gerar novamente.';
   monthGenerationRunning = true;
   let result;
-  try { result = await sendMonthlyOpening({ force: true, advance: true, confirmOrdinaryReset: expectedAction === 'REGENERATE' }); }
+  try { result = await sendMonthlyOpening({ force: true, advance: true, groupJid, confirmOrdinaryReset: expectedAction === 'REGENERATE' }); }
   finally { monthGenerationRunning = false; }
   if (!result.sent) return result.reason || 'Não foi possível gerar o próximo mês.';
   const generation = result.generation;
@@ -1217,7 +1218,7 @@ async function handleMonthGenerationAnswer(socket, message, body, originalIdenti
   if (!isConfiguredAdministrator(identity.member)) return { handled: true, text: 'Somente administradores configurados no painel WhatsApp podem gerar a escala.' };
   if (!Number.isFinite(pending.expiresAt) || Date.now() > pending.expiresAt) return { handled: true, text: 'Essa pergunta expirou. Peça para gerar a escala novamente.' };
   if (!yes) return { handled: true, text: 'Geração cancelada. Nenhuma escala foi alterada.' };
-  try { return { handled: true, text: await generateNextMonthFromGroup(pending.target, pending.action) }; }
+  try { return { handled: true, text: await generateNextMonthFromGroup(pending.target, pending.action, message.key.remoteJid) }; }
   catch (error) {
     if (error.status) return { handled: true, text: error.message };
     console.error('Falha ao gerar/publicar o próximo mês:', error);
@@ -2468,13 +2469,8 @@ export async function sendWhatsAppText(text, { mentions = [] } = {}) {
   return results;
 }
 
-export async function sendWhatsAppDocument({ buffer, fileName, caption }) {
-  const safeCaption = caption || 'Escala em PDF.';
-  const results = [];
-  for (const destination of configuredDestinations()) {
-    const result = await connection.socket.sendMessage(destination, { document: buffer, mimetype: 'application/pdf', fileName, caption: safeCaption });
-    logOutboundMessage(connection.socket, result, destination, safeCaption);
-    results.push(result);
-  }
-  return results;
+export async function sendWhatsAppDocument({ buffer, fileName, caption, groupJid }) {
+  const configuredGroups = configuredDestinations();
+  return sendGroupDocument({ socket: connection.socket, configuredGroups, groupJid, buffer, fileName, caption,
+    onSent: (result, destination, text) => logOutboundMessage(connection.socket, result, destination, text) });
 }

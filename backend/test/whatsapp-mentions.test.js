@@ -1357,3 +1357,22 @@ test('a generation confirmation cannot silently become regeneration after anothe
   assert.match(replies.at(-1).text, /escala mudou desde a pergunta/);
   assert.equal(generationPending(), null);
 });
+
+test('another configured group receives the existing scale only when it requests the PDF', async () => {
+  const otherGroup = '120000000000099@g.us';
+  setting.run('whatsapp_group_jids', JSON.stringify([group, otherGroup]), stamp);
+  const deliveries = [];
+  const send = socket.sendMessage;
+  socket.sendMessage = async (destination, payload) => { deliveries.push({ destination, payload }); return send(destination, payload); };
+  try {
+    await handleIncomingMessages(socket, { messages: [{
+      key: { id: `in-${++sequence}`, remoteJid: otherGroup, participant: sender, fromMe: false },
+      message: { conversation: '/escala' }
+    }] });
+    const pdfs = deliveries.filter((item) => item.payload.document);
+    assert.equal(pdfs.length, 1);
+    assert.equal(pdfs[0].destination, otherGroup);
+    assert.equal(deliveries.some((item) => item.destination === group), false);
+    assert.ok(Buffer.isBuffer(pdfs[0].payload.document));
+  } finally { setting.run('whatsapp_group_jids', JSON.stringify([group]), stamp); }
+});

@@ -155,7 +155,7 @@ export async function sendDailySchedule({ force = false } = {}) {
   return { sent: true };
 }
 
-export async function sendMonthlyOpening({ force = false, advance = false, confirmOrdinaryReset = false } = {}) {
+export async function sendMonthlyOpening({ force = false, advance = false, confirmOrdinaryReset = false, groupJid } = {}) {
   if (getWhatsAppStatus().status !== 'CONNECTED') return { sent: false, reason: 'WhatsApp desconectado.' };
   const nextMonth = dayjs().add(1, 'month').startOf('month');
   const advancedGeneration = advance
@@ -182,6 +182,7 @@ export async function sendMonthlyOpening({ force = false, advance = false, confi
     });
   const pdf = await buildSchedulePdf({ competency, slots: scheduleRows(competency.id) });
   await sendWhatsAppDocument({
+    groupJid,
     buffer: pdf,
     fileName: `escala-${monthKey}.pdf`,
     caption: `*ESCALA — ${competency.name.toUpperCase()}*\n\nServiços ordinários em preto; vagas restantes serão preenchidas como extras.`

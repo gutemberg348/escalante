@@ -426,8 +426,10 @@ Se o mês já existe, SIM refaz somente os ordinários daquele mês, preservando
 extras e a abertura das colunas. Não avança para outro mês. Ordinários fechados
 ou homologados precisam ser revisados no painel antes de regerar.
 
-O novo mês é gerado com o ciclo ordinário 1x4 e o PDF é publicado. A fila não
-começa automaticamente; envie o comando de início com a data e a coluna.
+O novo mês é gerado com o ciclo ordinário 1x4 e o PDF é enviado somente no grupo
+onde o pedido foi feito e confirmado. Nos outros grupos, peça /escala ou
+@Escalante escala do próximo mês para receber o PDF. A fila não começa
+automaticamente; envie o comando de início com a data e a coluna.
 
 
 4. ABRIR A 3ª OU A 4ª COLUNA
