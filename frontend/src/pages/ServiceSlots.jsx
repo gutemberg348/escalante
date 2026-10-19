@@ -174,11 +174,11 @@ export default function ServiceSlots() {
     {!generatedCompetencies.length
       ? <section className="panel empty-month"><h2>Nenhum mês gerado</h2><p>Use “Gerar / regerar mês” e escolha o mês e o ano. A escala será preparada e o PDF será baixado automaticamente.</p></section>
       : <section className="panel table-wrap"><div className="table-title"><div><h2>Horários de {selectedCompetency?.name}</h2><span>{days.length} dias neste mês</span></div></div>
-        <table><thead><tr><th>Data</th><th>Turno do dia</th><th>Turno da noite</th><th>Posições livres</th><th /></tr></thead><tbody>{days.map((day) => {
+        <table className="mobile-record-table month-days-table"><thead><tr><th>Data</th><th>Turno do dia</th><th>Turno da noite</th><th>Posições livres</th><th /></tr></thead><tbody>{days.map((day) => {
           const daySlot = day.DIURNO; const nightSlot = day.NOTURNO;
           const available = (daySlot?.available_positions || 0) + (nightSlot?.available_positions || 0);
           const total = (daySlot?.current_capacity || 0) + (nightSlot?.current_capacity || 0);
-          return <tr key={day.date}><td><strong>{dateLabel(day.date)}</strong></td><td>{coverage(daySlot)}</td><td>{coverage(nightSlot)}</td><td>{available} de {total}</td><td><button className="table-button" onClick={() => setConfirmationDate(day.date)}>Ver militares</button></td></tr>;
+          return <tr key={day.date}><td className="record-title"><strong>{dateLabel(day.date)}</strong></td><td data-label="Dia · 07h às 19h">{coverage(daySlot)}</td><td data-label="Noite · 19h às 07h">{coverage(nightSlot)}</td><td data-label="Posições livres">{available} de {total}</td><td className="record-actions"><button className="table-button" onClick={() => setConfirmationDate(day.date)}>Ver militares</button></td></tr>;
         })}</tbody></table>{!slots.length && <p className="empty-table">Este mês ainda não possui horários.</p>}</section>}
 
     {monthAction && <div className="modal-backdrop" role="presentation"><section className={`edit-modal month-confirmation-modal ${isRegeneration ? 'destructive' : ''}`} role="dialog" aria-modal="true" aria-label="Escolher mês para gerar ou regerar">

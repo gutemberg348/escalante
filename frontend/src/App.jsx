@@ -42,12 +42,18 @@ function Layout() {
   const navigate = useNavigate();
   const location = useLocation();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [theme, setTheme] = useState(() => document.documentElement.dataset.theme || 'light');
   const [mobile, setMobile] = useState(() => window.matchMedia('(max-width: 950px)').matches);
   const sidebar = useRef(null);
   const main = useRef(null);
   const menuButton = useRef(null);
   const closeButton = useRef(null);
   const session = useQuery({ queryKey: ['me'], queryFn: () => api.get('/auth/me').then((response) => response.data.user), retry: false });
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    try { localStorage.setItem('escala-theme', theme); } catch { /* Keep the theme for this session when storage is unavailable. */ }
+  }, [theme]);
 
   useEffect(() => {
     const media = window.matchMedia('(max-width: 950px)');
@@ -96,7 +102,7 @@ function Layout() {
     <div className="nav-label">OPERAÇÃO</div>
     <nav aria-label="Páginas do painel">{links.map(([to, label, icon]) => <NavLink key={to} to={to} onClick={() => setMenuOpen(false)}><span className="nav-icon"><NavigationIcon name={icon} /></span><span className="nav-link-label">{label}</span></NavLink>)}</nav>
     <div className="sidebar-foot"><div className="environment"><span />Ambiente de simulação</div><div className="user"><div className="avatar">{session.data.name.slice(0, 1)}</div><div><strong>{session.data.name}</strong><span>{session.data.role.replaceAll('_', ' ')}</span></div><button className="link" title="Sair" aria-label="Sair da conta" onClick={logout}>↗</button></div></div>
-  </aside><main ref={main} aria-hidden={mobile && menuOpen ? true : undefined}><div className="topbar"><div className="topbar-start"><button ref={menuButton} type="button" className="mobile-menu-toggle" aria-label="Abrir menu de navegação" aria-expanded={mobile && menuOpen} aria-controls="app-navigation" onClick={() => setMenuOpen(true)}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" /></svg></button><div><span className="eyebrow">CICC / GESTÃO DE ESCALA</span><strong>{currentPage}</strong></div></div><div className="topbar-status"><span /><span className="topbar-status-label">Sistema operacional</span></div></div>
+  </aside><main ref={main} aria-hidden={mobile && menuOpen ? true : undefined}><div className="topbar"><div className="topbar-start"><button ref={menuButton} type="button" className="mobile-menu-toggle" aria-label="Abrir menu de navegação" aria-expanded={mobile && menuOpen} aria-controls="app-navigation" onClick={() => setMenuOpen(true)}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" /></svg></button><div className="topbar-heading"><span className="eyebrow">CICC / GESTÃO DE ESCALA</span><strong>{currentPage}</strong></div></div><div className="topbar-tools"><div className="topbar-status"><span /><span className="topbar-status-label">Sistema operacional</span></div><button type="button" className="theme-toggle" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')} aria-label={theme === 'dark' ? 'Ativar tema claro' : 'Ativar tema escuro'} title={theme === 'dark' ? 'Ativar tema claro' : 'Ativar tema escuro'}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{theme === 'dark' ? <><circle cx="12" cy="12" r="4" /><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5" /></> : <path d="M20.8 13.2A9 9 0 0 1 10.8 3.1 9 9 0 1 0 20.8 13.2Z" />}</svg></button></div></div>
     <div className="page-content"><Routes>
       <Route path="/alas" element={<Wings />} />
       <Route path="/dashboard" element={<Dashboard />} /><Route path="/efetivo" element={<Members />} /><Route path="/antiguidade" element={<Seniority />} /><Route path="/competencias" element={<Competencies />} /><Route path="/horarios" element={<ServiceSlots />} /><Route path="/gerenciar-escala" element={<ScheduleManagement />} /><Route path="/whatsapp" element={<WhatsApp />} /><Route path="/configuracoes" element={<Settings />} /><Route path="*" element={<Navigate to="/dashboard" replace />} />

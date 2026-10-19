@@ -1,0 +1,67 @@
+/* Calendário editável: a data identifica o bloco e cada turno tem sua própria faixa. */
+.roster-calendar { min-width: 0; }
+.roster-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin-bottom: 20px; padding: 20px; background: #e9f2f8; border: 1px solid #cbdde9; border-radius: 14px; }
+.roster-toolbar h2 { margin: 0; font-size: 21px; color: #163b56; }
+.roster-toolbar p { margin: 8px 0 0; color: #48647a; font-size: 13px; line-height: 1.6; }
+.roster-toolbar label { flex: 0 0 210px; color: #284b64; font-size: 12px; }
+.roster-toolbar select { width: 100%; min-height: 46px; font-size: 16px; background: #fff; }
+.roster-days { display: grid; gap: 28px; }
+.roster-day { min-width: 0; border: 1px solid #bccfdd; border-radius: 16px; background: #fff; box-shadow: 0 5px 16px #153b5510; }
+.roster-date { display: flex; align-items: center; gap: 18px; margin: -1px -1px 0; padding: 18px 22px; border-radius: 16px 16px 0 0; background: #173f5b; color: #fff; scroll-margin-top: 90px; }
+.roster-date time { display: block; flex-shrink: 0; font-size: 37px; font-weight: 800; line-height: 1; letter-spacing: -1.5px; font-variant-numeric: tabular-nums; }
+.roster-date time span { font-size: 25px; color: #b6deef; letter-spacing: -1px; }
+.roster-date-detail { display: grid; gap: 4px; padding-left: 18px; border-left: 1px solid #ffffff40; text-transform: capitalize; }
+.roster-date-detail strong { font-size: 16px; color: #fff; }
+.roster-date-detail>span { font-size: 12px; font-weight: 500; color: #c4dce9; }
+.roster-shift { padding: 18px; }
+.roster-shift-day { background: #fff8e8; }
+.roster-shift-night { background: #edf2fc; border-top: 2px solid #cad6ed; border-radius: 0 0 16px 16px; }
+.roster-shift-heading { display: flex; gap: 11px; align-items: center; margin-bottom: 14px; color: #82500c; }
+.roster-shift-icon { display: grid; place-items: center; width: 42px; height: 42px; flex-shrink: 0; border-radius: 12px; background: #fce5b4; }
+.roster-shift-icon svg { width: 25px; height: 25px; }
+.roster-shift-heading h4 { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; margin: 0; font-size: 21px; line-height: 1.4; }
+.roster-shift-heading h4 span { font-size: 13px; font-weight: 600; }
+.roster-shift-night .roster-shift-heading { color: #324c88; }
+.roster-shift-night .roster-shift-icon { color: #fff; background: #405992; }
+.roster-positions { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; align-items: stretch; }
+.roster-position { display: flex; flex-direction: column; min-width: 0; gap: 12px; padding: 15px; border: 1px solid #d2dde6; border-radius: 11px; background: #fff; }
+.roster-position-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.roster-position-label { color: #52677a; font-size: 12px; font-weight: 700; }
+.roster-service-type { border-radius: 5px; padding: 4px 7px; color: #314b61; background: #edf1f5; font-size: 10px; font-weight: 800; }
+.roster-service-type.is-extra { color: #a62d3b; background: #ffedf0; }
+.roster-member-name { color: #233e54; font-size: 15px; line-height: 1.6; overflow-wrap: anywhere; }
+.roster-position.is-extra .roster-member-name { color: #af283b; }
+.roster-position.is-vacant { background: #eaf8ee; border-color: #b5dbc1; }
+.roster-position.is-vacant>strong { color: #216239; font-size: 16px; }
+.roster-position.is-locked { background: #fceced; border-color: #e9c6cb; }
+.roster-position.is-locked>strong { color: #95434f; font-size: 14px; }
+.roster-position-note { color: #85515b; font-size: 12px; }
+.roster-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: auto; padding-top: 4px; }
+.roster-calendar button.roster-action { display: flex; align-items: center; justify-content: center; min-width: 0; min-height: 44px; height: auto; padding: 10px 7px; border: 1px solid #bdd1e0; border-radius: 7px; background: #edf4fa; color: #25526f; box-shadow: none; font-size: 12px; font-weight: 700; line-height: 1.4; white-space: normal; touch-action: manipulation; }
+.roster-calendar button.roster-replace { background: #167da6; border-color: #167da6; color: #fff; }
+.roster-calendar button.roster-remove { background: #ffedf0; border-color: #e6b9c0; color: #a22b3d; }
+.roster-calendar button.roster-add { margin-top: auto; background: #24754a; border-color: #24754a; color: #fff; }
+.roster-calendar .roster-action:hover:not(:disabled) { filter: brightness(.94); }
+.roster-calendar .roster-action:disabled { opacity: .5; cursor: wait; }
+.roster-calendar :is(button, select, h3):focus-visible { outline: 3px solid #249fd4; outline-offset: 3px; }
+@media (max-width: 1250px) {
+  .roster-positions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 600px) {
+  .roster-toolbar { display: grid; gap: 16px; padding: 16px; }
+  .roster-toolbar h2 { font-size: 19px; }
+  .roster-toolbar label { width: 100%; }
+  .roster-date { position: sticky; top: 66px; z-index: 3; padding: 16px; gap: 14px; box-shadow: 0 3px 8px #173f5b1c; }
+  .roster-date time { font-size: 36px; }
+  .roster-date-detail { padding-left: 14px; }
+  .roster-date-detail strong { font-size: 14px; }
+  .roster-shift { padding: 14px; }
+  .roster-shift-heading h4 { display: grid; gap: 0; font-size: 21px; }
+  .roster-shift-heading h4 span { font-size: 12px; }
+  .roster-positions { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+  .roster-position { padding: 15px; }
+  .roster-member-name { font-size: 16px; }
+  .roster-calendar button.roster-action { min-height: 46px; font-size: 13px; }
+  .roster-position.is-locked { display: grid; grid-template-columns: 1fr auto; gap: 8px; padding: 12px 15px; }
+  .roster-position.is-locked .roster-position-note { display: none; }
+}

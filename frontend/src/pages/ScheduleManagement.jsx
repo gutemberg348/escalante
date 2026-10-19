@@ -138,14 +138,27 @@ export default function ScheduleManagement() {
     {!generatedCompetencies.length && <section className="panel"><p>Nenhum mês gerado. Use Gestão do mês para gerar a escala desejada.</p></section>}
     {actionError && <p className="error schedule-manager-feedback">{actionError.response?.data?.message || 'Não foi possível atualizar a escala.'}</p>}
     {isLoading && <section className="panel"><p className="modal-copy">Carregando planilha...</p></section>}
-    {competencyId && !isLoading && <section className="panel schedule-sheet-wrap"><div className="schedule-sheet-title"><div><span className="eyebrow">PLANILHA EDITÁVEL</span><h2>{schedule?.competency?.name}</h2></div><span>{vacancies.length} vagas livres</span></div>
-      <div className="schedule-sheet"><div className="schedule-sheet-head"><span>Data</span><span>Turno</span><span>1ª posição</span><span>2ª posição</span><span>3ª coluna</span><span>4ª coluna</span></div>
-        {days.map((day) => <div className="schedule-day-group" key={day.date}>
-          <strong className="schedule-day-label">{dateLabel(day.date)}</strong>
-          <div className="schedule-day-slots">{['DIURNO', 'NOTURNO'].map((period) => {
+    {competencyId && !isLoading && <section className="roster-calendar" aria-label="Calendário da escala">
+      <div className="roster-toolbar"><div><span className="eyebrow">CALENDÁRIO DA ESCALA</span><h2>{schedule?.competency?.name}</h2><p>{vacancies.length} vagas livres · Confira a data e o turno antes de alterar.</p></div>
+        <label>Ir para o dia<select value="" disabled={!days.length} onChange={(event) => {
+          const dayHeading = document.getElementById(`roster-day-${event.target.value}`);
+          dayHeading?.scrollIntoView({ block: 'start' });
+          dayHeading?.focus({ preventScroll: true });
+        }}><option value="">Escolha uma data</option>{days.map((day) => <option value={day.date} key={day.date}>{dateLabel(day.date)}</option>)}</select></label>
+      </div>
+      <div className="roster-days">
+        {days.map((day) => <section className="roster-day" key={day.date} aria-labelledby={`roster-day-${day.date}`}>
+          <h3 className="roster-date" id={`roster-day-${day.date}`} tabIndex={-1}>
+            <time dateTime={day.date}>{day.date.slice(8, 10)}<span>/{day.date.slice(5, 7)}</span></time>
+            <span className="roster-date-detail"><strong>{new Date(`${day.date}T00:00`).toLocaleDateString('pt-BR', { weekday: 'long' })}</strong><span>{new Date(`${day.date}T00:00`).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })}</span></span>
+          </h3>
+          <div className="roster-shifts">{['DIURNO', 'NOTURNO'].map((period) => {
             const slot = day[period];
             if (!slot) return null;
-            return <div className="schedule-sheet-row" key={slot.id}><span className="schedule-period">{periodLabel(period)}</span>
+            const isDay = period === 'DIURNO';
+            return <section className={`roster-shift ${isDay ? 'roster-shift-day' : 'roster-shift-night'}`} key={slot.id} aria-label={`${dateLabel(day.date)} · ${periodLabel(period)}`}>
+              <div className="roster-shift-heading"><span className="roster-shift-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">{isDay ? <><circle cx="12" cy="12" r="4" /><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5" /></> : <path d="M20.8 13.2A9 9 0 0 1 10.8 3.1 9 9 0 1 0 20.8 13.2Z" />}</svg></span><h4>{isDay ? 'Dia' : 'Noite'}<span>{isDay ? '07h às 19h' : '19h às 07h do dia seguinte'}</span></h4></div>
+              <div className="roster-positions">
               {[1, 2, 3, 4].map((position) => {
                 const assignment = slot.assignments?.find((item) => item.positionNumber === position);
                 const locked = position > Number(slot.current_capacity);
@@ -154,9 +167,10 @@ export default function ScheduleManagement() {
                   onMove={() => { setMoving({ slot, position, assignment }); setTarget(''); }} onRemove={() => removeAssignment(slot, position, assignment)}
                   onToggleType={() => changeServiceType.mutate({ assignmentId: assignment.id, serviceType: assignment.serviceType === 'ORDINARY' ? 'EXTRAORDINARY' : 'ORDINARY' })} typePending={changeServiceType.isPending} />;
               })}
-            </div>;
+              </div>
+            </section>;
           })}</div>
-        </div>)}</div>
+        </section>)}</div>
       {!days.length && <p className="empty-table">Não há horários preparados neste mês.</p>}
     </section>}
 
@@ -182,17 +196,18 @@ export default function ScheduleManagement() {
 }
 
 function ScheduleCell({ slot, position, assignment, locked, editable, onAdd, onReplace, onMove, onRemove, onToggleType, typePending, actionPending }) {
-  if (locked) return <div className="schedule-cell locked" data-position={`${position}ª posição`}>Trancada</div>;
-  if (!assignment) return <div className="schedule-cell vacancy" data-position={`${position}ª posição`}><span>Vaga</span>{editable && <button type="button" className="table-button" disabled={actionPending} onClick={onAdd}>Adicionar</button>}</div>;
+  const positionLabel = <span className="roster-position-label">{position}ª posição</span>;
+  if (locked) return <div className="roster-position is-locked">{positionLabel}<strong>Trancada</strong><span className="roster-position-note">Coluna fechada</span></div>;
+  if (!assignment) return <div className="roster-position is-vacant">{positionLabel}<strong>Vaga livre</strong>{editable && <button type="button" className="roster-action roster-add" disabled={actionPending} onClick={onAdd}>+ Adicionar militar</button>}</div>;
   const extraAssignment = assignment.serviceType === 'EXTRAORDINARY';
-  return <div className={`schedule-cell occupied ${extraAssignment ? 'extra-assignment' : ''}`} data-position={`${position}ª posição`}>
-    <div className="schedule-assignment-title"><strong>{assignment.rank} {assignment.operationalName}{assignment.displayPrefix ? ` (${assignment.displayPrefix})` : ''}</strong>
-      <span className={`service-type-badge ${extraAssignment ? 'extra' : 'ordinary'}`}>{extraAssignment ? 'Extra' : 'Ordinário'}</span></div>
-    {editable && <div className="schedule-cell-actions">
-      <button type="button" className="small-action" disabled={actionPending} onClick={onReplace}>Trocar militar</button>
-      <button type="button" className="small-action" disabled={actionPending} onClick={onMove}>Posição</button>
-      <button type="button" className="small-action" disabled={typePending || actionPending} onClick={onToggleType}>Mudar tipo</button>
-      <button type="button" className="small-action danger" disabled={actionPending} aria-label={`Retirar ${assignment.rank} ${assignment.operationalName} da ${position}ª posição de ${dateLabel(slot.service_date)}, ${slot.period === 'DIURNO' ? 'dia' : 'noite'}`} onClick={onRemove}>Retirar</button>
+  return <div className={`roster-position is-occupied ${extraAssignment ? 'is-extra' : ''}`}>
+    <div className="roster-position-heading">{positionLabel}<span className={`roster-service-type ${extraAssignment ? 'is-extra' : ''}`}>{extraAssignment ? 'Extra' : 'Ordinário'}</span></div>
+    <strong className="roster-member-name">{assignment.rank} {assignment.operationalName}{assignment.displayPrefix ? ` (${assignment.displayPrefix})` : ''}</strong>
+    {editable && <div className="roster-actions">
+      <button type="button" className="roster-action roster-replace" disabled={actionPending} onClick={onReplace}>Trocar militar</button>
+      <button type="button" className="roster-action" disabled={actionPending} onClick={onMove}>Mover posição</button>
+      <button type="button" className="roster-action" disabled={typePending || actionPending} onClick={onToggleType}>Mudar tipo</button>
+      <button type="button" className="roster-action roster-remove" disabled={actionPending} aria-label={`Retirar ${assignment.rank} ${assignment.operationalName} da ${position}ª posição de ${dateLabel(slot.service_date)}, ${slot.period === 'DIURNO' ? 'dia' : 'noite'}`} onClick={onRemove}>Retirar</button>
     </div>}
   </div>;
 }
