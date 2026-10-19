@@ -76,7 +76,7 @@ export default function Wings() {
     <section className="panel wings-toolbar"><label>Mês de referência<select value={competencyId} onChange={(e) => {
       setCompetencyId(e.target.value); setPreview(null); setEditing(null); setFeedback(''); loadPreview.reset();
     }}><option value="">Selecione uma escala</option>{generated.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-      <p>Confira os militares e os dias de cada ala no mês selecionado.</p>
+      <p>Confira os militares de cada ala no mês selecionado.</p>
       <button className="secondary-button" disabled={!data} onClick={download}>Baixar PDF</button></section>
     {feedback && <p className="success" role="status">{feedback}</p>}
     {(error || downloadError) && <p className="error" role="alert">{downloadError || error?.response?.data?.message || 'Não foi possível carregar as alas.'}</p>}
@@ -88,7 +88,6 @@ export default function Wings() {
       <div className="wings-grid">{wings.map((wing) => {
         const roster = data.memberships.filter((row) => row.wing_id === wing.id);
         return <section key={wing.id} className={`panel wing-card wing-${wing.number}`}><header><span className="wing-number">{wing.number}</span><div><h2>{wing.name}</h2><span>Serviço ordinário · 24 horas</span></div></header>
-          <div className="wing-dates">{wing.dates.length ? wing.dates.map((date) => <span key={date}>{Number(date.slice(-2))}</span>) : <small>Cadastre as alas para visualizar os dias.</small>}</div>
           <div className="wing-members">{[1, 2].map((position) => {
             const entries = roster.filter((row) => row.position_number === position);
             return <div className="wing-position" key={position}><span className="eyebrow">{position}ª POSIÇÃO</span>
