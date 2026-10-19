@@ -376,7 +376,7 @@ extras continuam preservados.
 
    /escala 10/2026
    @Escalante escala outubro de 2026
-   Troca o mês ativo e envia o PDF correspondente.
+   Envia somente o PDF correspondente, sem trocar o mês selecionado.
 
    /escala próximo mês
    /escala mês que vem
@@ -385,13 +385,26 @@ extras continuam preservados.
    /escala mês 11
    /escala 11
    @Escalante escala novembro de 2027
-   Também selecionam o mês solicitado e enviam seu PDF, se já foi gerado.
+   Enviam o PDF do mês solicitado, se já foi gerado, sem alterar a seleção.
    /escala sem mês usa a seleção atual. Próximo mês é o mês seguinte à data
    atual, inclusive na virada de dezembro para janeiro.
 
    /minhas mês 11
    /vagas novembro
    Consultam o mês informado sem mudar o mês selecionado.
+
+Para TROCAR o mês selecionado, somente administradores configurados no painel:
+
+   @Escalante escala zap mês que vem
+   /escala zap próximo mês
+   /escala zap este mês
+   /escala whatsapp novembro
+   /ativar escala 11/2026
+   @Escalante passar para o próximo mês
+
+Esses pedidos explícitos trocam a seleção e enviam o PDF. Depois deles, /escala
+sem mês e as marcações sem mês passam a usar a nova seleção. Pedir apenas o PDF
+de outro mês ou gerar/regerar uma escala não muda o mês selecionado.
 
 Na virada do calendário, se a seleção ficou no passado, o WhatsApp avança
 para o mês atual já gerado ou para o próximo disponível. Os seletores do painel
@@ -512,7 +525,7 @@ Para o mês inteiro, depois de conferir o aviso:
    @Escalante fechar 4ª coluna no mês inteiro EXCLUA
 
 Os comandos alteram o mês que está ativo no WhatsApp. Para escolher outro mês,
-use primeiro /escala MM/AAAA.
+use primeiro /escala zap MM/AAAA. /escala MM/AAAA apenas consulta o PDF.
 
 Ao fechar a 3ª coluna, a 4ª também será fechada nos mesmos dias.
 EXCLUA remove as marcações que ocupam as posições fechadas; use somente depois

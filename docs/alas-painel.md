@@ -37,6 +37,8 @@ No WhatsApp, **@Escalante gerar próximo mês** também usa o próximo mês do c
 
 O PDF dessa geração ou regeneração é enviado somente no grupo em que o pedido foi confirmado. Os outros grupos podem consultar a mesma escala com **/escala** ou **@Escalante escala do próximo mês**, recebendo o PDF apenas no grupo que pediu.
 
+Consultar **/escala próximo mês**, **/escala novembro** ou **/escala MM/AAAA**, assim como gerar/regerar um mês, mantém a seleção atual do WhatsApp. Para mudar explicitamente a seleção, um administrador configurado no painel usa **@Escalante escala zap mês que vem** ou **/escala zap MM/AAAA**. **/escala zap este mês** volta ao mês atual. Na virada do calendário, uma seleção antiga avança automaticamente para o mês gerado correspondente.
+
 ## Excluir um mês
 
 Em **Gerenciar escala** ou **Gestão do mês**, selecione a competência e clique em **Excluir mês**. A confirmação mostra o nome do mês e a quantidade de ordinários e extras que serão removidos. Administradores e escalantes podem confirmar a exclusão.

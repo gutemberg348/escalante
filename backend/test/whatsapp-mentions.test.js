@@ -1116,15 +1116,15 @@ test('unavailable and invalid explicit months never book in the selected month',
   }
 });
 
-test('PDF month selectors choose the exact generated month and keep it for following commands', async () => {
+test('PDF month queries send the requested month and keep following commands in the selected month', async () => {
   const target = generatedMonth(futureYear, 11);
   for (const selector of ['mês 11', '11', 'novembro', `11/${futureYear}`]) {
     await receive(`/escala ${selector}`, []);
-    assert.equal(activeCompetency().id, target.id);
+    assert.equal(activeCompetency().id, competency.id);
     assert.equal(replies.at(-1).fileName, `escala-${futureYear}-11.pdf`);
   }
   await receive('/marcar dia 22 noite', []);
-  assert.equal(bookedDates()[0].service_date, `${futureYear}-11-22`);
+  assert.equal(bookedDates()[0].service_date, `${futureYear}-09-22`);
 });
 
 test('next month means the next calendar month even when the selected month is far ahead', async () => {
@@ -1135,9 +1135,11 @@ test('next month means the next calendar month even when the selected month is f
   assert.equal(bookedDates()[0].service_date, `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, '0')}-20`);
   assert.equal(activeCompetency().id, competency.id);
   await receive('/escala próximo mês', []);
-  assert.equal(activeCompetency().id, target.id);
+  assert.equal(activeCompetency().id, competency.id);
+  assert.equal(replies.at(-1).fileName, `escala-${target.year}-${String(target.month).padStart(2, '0')}.pdf`);
   await receive('/escala mês que vem', []);
-  assert.equal(activeCompetency().id, target.id);
+  assert.equal(activeCompetency().id, competency.id);
+  assert.equal(replies.at(-1).fileName, `escala-${target.year}-${String(target.month).padStart(2, '0')}.pdf`);
 });
 
 test('this month PDF and stale selection rollover choose the calendar month', async () => {
@@ -1148,12 +1150,56 @@ test('this month PDF and stale selection rollover choose the calendar month', as
   setting.run('bot_active_competency_id', String(previous.id), stamp);
   setting.run('bot_active_selection_month', `${previous.year}-${String(previous.month).padStart(2, '0')}`, stamp);
   assert.equal(activeCompetency().id, current.id);
-  // Deliberately consulting an old month stays selected until the next rollover.
+  // An explicit selection stays selected; a PDF query does not override it.
   setActiveWhatsAppCompetency(previous.id);
   assert.equal(activeCompetency().id, previous.id);
   await receive('/escala este mês', []);
-  assert.equal(activeCompetency().id, current.id);
+  assert.equal(activeCompetency().id, previous.id);
   assert.equal(replies.at(-1).fileName, `escala-${current.year}-${String(current.month).padStart(2, '0')}.pdf`);
+});
+
+test('escala zap explicitly selects the requested month and applies to following bookings', async () => {
+  const target = generatedMonth(futureYear, 11);
+  setting.run('whatsapp_admin_member_ids', '[1]', stamp);
+  await receive(`/escala zap novembro de ${futureYear}`, []);
+  assert.match(replies.find((reply) => reply.text)?.text, /MÊS DA ESCALA ALTERADO/);
+  assert.equal(activeCompetency().id, target.id);
+  assert.equal(replies.at(-1).fileName, `escala-${futureYear}-11.pdf`);
+  await receive('/marcar dia 22 noite', []);
+  assert.equal(bookedDates()[0].service_date, `${futureYear}-11-22`);
+});
+
+test('explicit next-month selection accepts WhatsApp and passing-to-next-month phrases', async () => {
+  const today = new Date();
+  const date = new Date(today.getFullYear(), today.getMonth() + 1, 1);
+  const target = generatedMonth(date.getFullYear(), date.getMonth() + 1);
+  setting.run('whatsapp_admin_member_ids', '[1]', stamp);
+  for (const command of ['@Escalante escala zap mês que vem', '/escala whatsapp próximo mês', '/passar para o próximo mês', '/ativar escala próximo mês']) {
+    setActiveWhatsAppCompetency(competency.id);
+    await receive(command, [bot]);
+    assert.equal(activeCompetency().id, target.id, command);
+    assert.equal(replies.at(-1).fileName, `escala-${target.year}-${String(target.month).padStart(2, '0')}.pdf`);
+  }
+});
+
+test('querying a named month is read-only even when replying to the bot', async () => {
+  const target = generatedMonth(futureYear, 11);
+  const before = db.prepare("SELECT * FROM system_settings WHERE key IN ('bot_active_competency_id','bot_active_selection_month') ORDER BY key").all();
+  await receive(`escala novembro de ${futureYear}`, [], { participant: bot, stanzaId: 'bot-question', quotedMessage: { conversation: 'Escala selecionada' } });
+  assert.equal(replies.at(-1).fileName, `escala-${target.year}-11.pdf`);
+  assert.deepEqual(db.prepare("SELECT * FROM system_settings WHERE key IN ('bot_active_competency_id','bot_active_selection_month') ORDER BY key").all(), before);
+  await receive('/escala', []);
+  assert.equal(replies.at(-1).fileName, `escala-${competency.year}-09.pdf`);
+});
+
+test('an unconfigured administrator cannot change the selected month but can request its PDF', async () => {
+  generatedMonth(futureYear, 11);
+  await receive('/escala zap novembro', []);
+  assert.match(replies.at(-1).text, /administradores configurados/);
+  assert.equal(activeCompetency().id, competency.id);
+  await receive('/escala novembro', []);
+  assert.equal(replies.at(-1).fileName, `escala-${futureYear}-11.pdf`);
+  assert.equal(activeCompetency().id, competency.id);
 });
 
 test('concurrent bookings keep their explicit months isolated and leave the default unchanged', async () => {

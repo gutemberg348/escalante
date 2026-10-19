@@ -167,7 +167,7 @@ Vagas **majoradas** são classificadas automaticamente em sextas, sábados, domi
 
 O bot funciona exclusivamente no grupo configurado no painel. Mensagens recebidas em conversas privadas são ignoradas antes da identificação do militar e nunca recebem resposta. Envios automáticos também exigem obrigatoriamente um JID de grupo terminado em `@g.us`.
 
-O bot escolhe automaticamente a competência do próximo mês. Caso seja necessário abrir outra competência, o administrador pode gravar o ID desejado em `system_settings.bot_active_competency_id`; isso é a exceção administrativa, não é necessário no uso normal.
+O bot mantém a competência selecionada para consultas e marcações sem mês. Consultar o PDF de outro mês ou gerar uma escala não troca a seleção. Administradores configurados no painel podem mudar explicitamente com `/escala zap próximo mês` ou `/escala zap MM/AAAA`, e voltar com `/escala zap este mês`. Na virada do calendário, uma seleção antiga avança automaticamente para uma competência já gerada.
 
 Na página **Horários**, o seletor mostra um mês por vez e abre, quando existir, no mês atual. A 1ª e a 2ª posições começam abertas em cada turno. A 3ª e a 4ª colunas permanecem visíveis no PDF em amarelo com `TRANCADA`; quando liberadas no painel, passam a valer para **Dia e Noite** nas datas escolhidas. No PDF, Dia e Sem. ficam mesclados entre os dois turnos da mesma data, sem uma linha horizontal no meio dessas células.
 

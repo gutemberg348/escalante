@@ -3,7 +3,7 @@ import { db, now } from '../database/index.js';
 import { buildSchedulePdf } from './schedule-pdf.js';
 import {
   advanceExpiredMarkingTurn, getWhatsAppStatus, notifyCurrentMarkingTurn,
-  sendMarkingSchedule, sendWhatsAppDocument, sendWhatsAppText, setActiveWhatsAppCompetency
+  sendMarkingSchedule, sendWhatsAppDocument, sendWhatsAppText
 } from './whatsapp.js';
 import { ensureCompetencySchedule, generateNextMonthSchedule, generateOrdinaryAssignments } from '../scheduling/monthly.js';
 
@@ -166,14 +166,12 @@ export async function sendMonthlyOpening({ force = false, advance = false, confi
   if (!force && readSetting('automation_last_monthly_run') === monthKey) return { sent: false, reason: 'A abertura do próximo mês já foi enviada.' };
   const firstOpening = readSetting('automation_last_monthly_run') !== monthKey;
   const administrator = db.prepare(`SELECT id FROM users WHERE role='ADMIN' AND active=1 ORDER BY id LIMIT 1`).get();
-  if (administrator && (firstOpening || advance)) {
+  if (administrator && firstOpening && advancedGeneration?.action !== 'REGENERATE') {
     const stamp = now();
-    if (firstOpening && advancedGeneration?.action !== 'REGENERATE') db.transaction(() => {
+    db.transaction(() => {
       db.prepare('DELETE FROM schedule_pdf_column_releases WHERE competency_id=?').run(competency.id);
       db.prepare('UPDATE service_slots SET minimum_required=2,normal_capacity=2,current_capacity=2,updated_at=? WHERE competency_id=?').run(stamp, competency.id);
     })();
-    setActiveWhatsAppCompetency(competency.id, administrator.id);
-    writeSetting('bot_active_marking_column', 2, administrator.id);
   }
   const generation = advancedGeneration ?? generateOrdinaryAssignments({
       competencyId: competency.id,

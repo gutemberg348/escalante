@@ -1107,8 +1107,9 @@ Outros atalhos:
 */parar cronograma* - encerra a fila e deixa a marcação livre (administrador configurado no painel WhatsApp)
 */escala* - recebe a escala em PDF
 */meses* - mostra os meses gerados e qual está ativo
-*/escala 10/2026* - troca o mês ativo e envia o novo PDF
-*/escala próximo mês*, */escala este mês*, */escala novembro* ou */escala 11* - selecionam um mês já gerado
+*/escala 10/2026* - envia o PDF desse mês sem mudar a seleção
+*/escala próximo mês*, */escala este mês*, */escala novembro* ou */escala 11* - consultam um mês já gerado
+*/escala zap próximo mês* ou */escala zap este mês* - troca o mês selecionado (administrador configurado no painel)
 */minhas mês 11* e */vagas novembro* - consultam o mês informado
 "Próximo mês" segue a data atual; mês sem ano usa o ano selecionado. Na virada do mês, uma seleção antiga avança automaticamente.
 */gerar-proximo-mes* - mostra o aviso antes de gerar (administrador configurado no painel WhatsApp)
@@ -1135,10 +1136,6 @@ Envie */comandos* ou apenas *comandos* para ver esta lista.`;
 
 const commandMonthNames = ['JANEIRO', 'FEVEREIRO', 'MARCO', 'ABRIL', 'MAIO', 'JUNHO', 'JULHO', 'AGOSTO', 'SETEMBRO', 'OUTUBRO', 'NOVEMBRO', 'DEZEMBRO'];
 
-function findGeneratedCompetency(selector) {
-  return resolveRequestedMonth(selector, true).competency ?? null;
-}
-
 function resolveRequestedMonth(text, selectorOnly = false) {
   const selected = activeCompetency();
   const request = parseRequestedMonth(text, { defaultYear: selected?.year ?? dayjs().year(), selectorOnly });
@@ -1153,12 +1150,21 @@ function generatedCompetenciesMessage() {
   const active = activeCompetency();
   const items = db.prepare('SELECT id,name FROM competencies WHERE generated_at IS NOT NULL ORDER BY year DESC,month DESC LIMIT 18').all();
   if (!items.length) return 'Nenhum mês foi gerado ainda.';
-  return `*MESES GERADOS*\n\n${items.map((item) => `${item.id === active?.id ? '✅' : '•'} ${item.name}${item.id === active?.id ? ' — ativa no /escala' : ''}`).join('\n')}\n\nPara trocar e enviar o PDF:\n*/escala 10/2026*`;
+  return `*MESES GERADOS*\n\n${items.map((item) => `${item.id === active?.id ? '✅' : '•'} ${item.name}${item.id === active?.id ? ' — ativa no /escala' : ''}`).join('\n')}\n\nPara consultar o PDF: */escala 10/2026*\nPara trocar o mês selecionado: */escala zap 10/2026*`;
+}
+
+function queryCompetencyFromGroup(selector) {
+  const request = resolveRequestedMonth(selector, true);
+  if (request.error) return request.error;
+  if (!request.requested) return 'Informe o mês desejado. Exemplo: */escala próximo mês* ou */escala novembro*.';
+  return commandMonthContext.run(request, () => schedulePdfMessage());
 }
 
 async function activateCompetencyFromGroup(selector, member) {
-  const competency = findGeneratedCompetency(selector);
-  if (!competency) return `Não encontrei esse mês entre as escalas geradas. Envie */meses* para consultar.`;
+  const request = resolveRequestedMonth(selector, true);
+  if (request.error) return request.error;
+  const competency = request.competency;
+  if (!competency) return 'Informe o mês que deve ficar selecionado. Exemplo: */escala zap próximo mês*.';
   setActiveWhatsAppCompetency(competency.id, null);
   audit({ action: 'BOT_ACTIVE_COMPETENCY_CHANGE', entityType: 'COMPETENCY', entityId: competency.id, after: competency, reason: `Alterada pelo grupo por ${member.rank} ${member.operational_name}` });
   const pdf = await schedulePdfMessage();
@@ -1327,8 +1333,13 @@ async function executeCommand(member, rawBody, { explicitSlash = false, targetMe
   const [command, argument] = normalized.split(/\s+/, 2);
   if (['MENU', 'AJUDA', 'COMANDOS'].includes(command)) return commandMenu();
   if (command === 'MESES') return generatedCompetenciesMessage();
-  const competencySwitch = normalized.match(/^(?:ESCALA|MES|USAR[-\s]+ESCALA|ATIVAR[-\s]+ESCALA)\s+(.+)$/);
-  if (competencySwitch && !targetMember) return activateCompetencyFromGroup(competencySwitch[1], member);
+  const competencySwitch = normalized.match(/^(?:ESCALA\s+(?:ZAP|WHATSAPP)|(?:USAR|ATIVAR|SELECIONAR)[-\s]+(?:A\s+)?ESCALA|(?:MUDAR|TROCAR|PASSAR)\s+(?:(?:A\s+)?ESCALA\s+)?PARA)\s+(.+)$/);
+  if (competencySwitch && !targetMember) {
+    if (!panelAdministrator) return 'Somente administradores configurados no painel WhatsApp podem trocar o mês selecionado.';
+    return activateCompetencyFromGroup(competencySwitch[1], member);
+  }
+  const pdfMonthQuery = normalized.match(/^(?:ESCALA|MES)\s+(.+)$/);
+  if (pdfMonthQuery && !targetMember) return queryCompetencyFromGroup(pdfMonthQuery[1]);
   const parseSelection = parseActiveMarkingRequest;
   const columnRequest = parseColumnCommand(commandBody);
   if (columnRequest) {
