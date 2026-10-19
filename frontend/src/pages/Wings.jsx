@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client.js';
@@ -8,6 +8,8 @@ const name = (member) => `${member.rank} ${member.operational_name}`;
 const dateLabel = (value) => value ? value.slice(0, 10).split('-').reverse().join('/') : '';
 const statusLabel = { ACTIVE: 'Ativo', VACATION: 'Férias', LEAVE: 'Licença', AWAY: 'Afastado', INACTIVE: 'Desativado' };
 const localToday = () => new Date().toLocaleDateString('en-CA');
+const monthLabel = (value) => value ? new Date(`${value.slice(0, 7)}-01T12:00:00`).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' }) : '';
+const membershipChanged = (current, next) => Boolean(next && (!current || next.wing_id !== current.wing_id || next.position_number !== current.position_number));
 
 export default function Wings() {
   const client = useQueryClient();
@@ -16,8 +18,12 @@ export default function Wings() {
   const [applyImportToCurrentMonth, setApplyImportToCurrentMonth] = useState(false);
   const [importFromDate, setImportFromDate] = useState('');
   const [editing, setEditing] = useState(null);
+  const [rosterPeriod, setRosterPeriod] = useState('CURRENT');
+  const [lastChangedMembers, setLastChangedMembers] = useState([]);
   const [feedback, setFeedback] = useState('');
   const [downloadError, setDownloadError] = useState('');
+  const feedbackRef = useRef(null);
+  useEffect(() => { if (feedback) feedbackRef.current?.scrollIntoView({ block: 'nearest' }); }, [feedback]);
   const session = useQuery({ queryKey: ['me'], queryFn: () => api.get('/auth/me').then((r) => r.data.user) });
   const editable = ['ADMIN', 'SCHEDULER'].includes(session.data?.role);
   const { data: competencies = [] } = useQuery({ queryKey: ['competencies'], queryFn: () => api.get('/competencies').then((r) => r.data.items) });
@@ -36,6 +42,10 @@ export default function Wings() {
   const members = data?.members || [];
   const start = data ? `${data.competency.year}-${String(data.competency.month).padStart(2, '0')}-01` : '';
   const end = data ? `${start.slice(0, 8)}${new Date(data.competency.year, data.competency.month, 0).getDate()}` : '';
+  const nextMonthLabel = monthLabel(data?.nextMonth.startsAt);
+  const futureView = rosterPeriod === 'NEXT';
+  const visibleMemberships = (futureView ? data?.nextMemberships : data?.memberships) || [];
+  const pendingChanges = data ? data.nextMemberships.filter((next) => membershipChanged(data.memberships.find((row) => row.member_id === next.member_id), next)).length : 0;
   const refresh = async () => {
     await Promise.all(['wings', 'members', 'schedule-management', 'slots', 'dashboard', 'competencies'].map((key) => client.invalidateQueries({ queryKey: [key] })));
   };
@@ -44,13 +54,17 @@ export default function Wings() {
   const saveImport = useMutation({ mutationFn: () => api.post('/wings/import', { competencyId: Number(competencyId),
     applyToCurrentMonth: applyImportToCurrentMonth, fromDate: applyImportToCurrentMonth ? importFromDate : undefined,
     entries: preview.entries.map(({ memberId, wingId, positionNumber }) => ({ memberId, wingId, positionNumber })) }),
-    onSuccess: async (response) => { setPreview(null); setFeedback(response.data.message); await refresh(); } });
+    onSuccess: async (response) => { setLastChangedMembers(preview.entries.map((entry) => entry.memberId)); setRosterPeriod('NEXT'); setPreview(null); setFeedback(response.data.message); await refresh(); } });
   const move = useMutation({ mutationFn: () => {
     const entries = [{ memberId: editing.memberId, wingId: Number(editing.wingId), positionNumber: Number(editing.positionNumber) }];
     if (editing.partnerId) entries.push({ memberId: Number(editing.partnerId), wingId: editing.originalWingId, positionNumber: editing.originalPosition });
     return api.post('/wings/move', { competencyId: Number(competencyId), scope: editing.scope, entries,
       fromDate: editing.scope === 'THIS_MONTH' ? editing.fromDate : undefined });
-  }, onSuccess: async (response) => { setEditing(null); setFeedback(response.data.message); await refresh(); } });
+  }, onSuccess: async (response) => {
+    setLastChangedMembers([editing.memberId, ...(editing.partnerId ? [Number(editing.partnerId)] : [])]);
+    setRosterPeriod(editing.scope === 'NEXT_MONTH' ? 'NEXT' : 'CURRENT');
+    setEditing(null); setFeedback(response.data.message); await refresh();
+  } });
   const openMove = (memberId, scope = 'NEXT_MONTH') => {
     const rows = scope === 'NEXT_MONTH' ? data.nextMemberships : data.memberships;
     const current = rows.find((row) => row.member_id === memberId);
@@ -74,19 +88,27 @@ export default function Wings() {
     <header className="page-header"><div><span className="eyebrow">ORGANIZAÇÃO DO SERVIÇO ORDINÁRIO</span><h1>Alas</h1><p>Organize os militares e programe as trocas de ala.</p></div>
       <Link className="secondary-button wings-link" to={`/gerenciar-escala?competency_id=${competencyId}`}>Gerenciar escala</Link></header>
     <section className="panel wings-toolbar"><label>Mês de referência<select value={competencyId} onChange={(e) => {
-      setCompetencyId(e.target.value); setPreview(null); setEditing(null); setFeedback(''); loadPreview.reset();
+      setCompetencyId(e.target.value); setPreview(null); setEditing(null); setFeedback(''); setRosterPeriod('CURRENT'); setLastChangedMembers([]); loadPreview.reset();
     }}><option value="">Selecione uma escala</option>{generated.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
       <p>Confira os militares de cada ala no mês selecionado.</p>
       <button className="secondary-button" disabled={!data} onClick={download}>Baixar PDF</button></section>
-    {feedback && <p className="success" role="status">{feedback}</p>}
+    {feedback && <p ref={feedbackRef} className="success wings-save-feedback" role="status">{feedback}</p>}
     {(error || downloadError) && <p className="error" role="alert">{downloadError || error?.response?.data?.message || 'Não foi possível carregar as alas.'}</p>}
     {query.isLoading && competencyId && <section className="panel">Carregando alas…</section>}
     {!generated.length && <section className="panel"><h2>Prepare uma escala primeiro</h2><p>As alas serão cadastradas a partir de um mês já gerado.</p><Link to="/horarios">Ir para Gestão do mês</Link></section>}
     {data && <>
       {!data.configured && editable && <section className="panel"><h2>Cadastrar militares nas alas</h2><p>Confira as alas dos militares e programe as mudanças para o próximo mês.</p>
         <button onClick={() => loadPreview.mutate()} disabled={loadPreview.isPending}>{loadPreview.isPending ? 'Lendo escala…' : 'Cadastrar militares nas alas'}</button></section>}
+      {data.configured && <section className="wings-period-panel" aria-label="Período das alas">
+        <div className="wings-period-switch" role="group" aria-label="Ver alas de qual mês?">
+          <button type="button" className={!futureView ? 'selected' : ''} aria-pressed={!futureView} onClick={() => setRosterPeriod('CURRENT')}><span>Mês selecionado</span><strong>{monthLabel(start)}</strong></button>
+          <button type="button" className={futureView ? 'selected' : ''} aria-pressed={futureView} onClick={() => setRosterPeriod('NEXT')}><span>Próximo mês {pendingChanges > 0 && <b className="wings-change-count">{pendingChanges}</b>}</span><strong>{nextMonthLabel}</strong></button>
+        </div>
+        <p>{futureView ? `Mostrando o cadastro programado para ${nextMonthLabel}. As alterações salvas aparecem nas alas abaixo.` : `Mostrando as alas de ${monthLabel(start)}. Trocas para o próximo mês aparecem na aba ao lado.`}</p>
+        {futureView && data.nextMonth.id > 0 && <small>Se a escala de {nextMonthLabel} já foi gerada, use Regerar nesse mês para atualizar os serviços publicados.</small>}
+      </section>}
       <div className="wings-grid">{wings.map((wing) => {
-        const roster = data.memberships.filter((row) => row.wing_id === wing.id);
+        const roster = visibleMemberships.filter((row) => row.wing_id === wing.id);
         return <section key={wing.id} className={`panel wing-card wing-${wing.number}`}><header><span className="wing-number">{wing.number}</span><div><h2>{wing.name}</h2><span>Serviço ordinário · 24 horas</span></div></header>
           <div className="wing-members">{[1, 2].map((position) => {
             const entries = roster.filter((row) => row.position_number === position);
@@ -94,20 +116,24 @@ export default function Wings() {
               {!entries.length && <p className="wing-empty">Sem militar cadastrado</p>}
               {entries.map((row) => { const member = members.find((item) => item.id === row.member_id); if (!member) return null;
                 const next = data.nextMemberships.find((item) => item.member_id === row.member_id);
-                return <div key={row.member_id} className="wing-person"><strong>{name(member)}</strong><small>{statusLabel[member.operational_status]}{!member.ordinary_eligible ? ' · Fora da ordinária' : ''}</small>
-                  {row.temporary && <span className="wing-tag">Somente este mês · desde {dateLabel(row.from_date)}</span>}
-                  {next && (next.wing_id !== row.wing_id || next.position_number !== row.position_number) && <span className="wing-tag next">Próximo mês: {wings.find((item) => item.id === next.wing_id)?.name} · {next.position_number}ª posição</span>}
+                const current = data.memberships.find((item) => item.member_id === row.member_id);
+                const changed = membershipChanged(current, next);
+                return <div key={row.member_id} className={`wing-person${lastChangedMembers.includes(member.id) ? ' recently-saved' : ''}`}><strong>{name(member)}</strong><small>{statusLabel[member.operational_status]}{!member.ordinary_eligible ? ' · Fora da ordinária' : ''}</small>
+                  {futureView && changed && <span className="wing-tag next">{current ? 'Troca programada' : 'Inclusão programada'} · desde {dateLabel(data.nextMonth.startsAt)}</span>}
+                  {!futureView && row.temporary && <span className="wing-tag">Somente este mês · desde {dateLabel(row.from_date)}</span>}
+                  {!futureView && changed && <span className="wing-tag next">Próximo mês: {wings.find((item) => item.id === next.wing_id)?.name} · {next.position_number}ª posição</span>}
                   {editable && <button className="table-button" onClick={() => openMove(member.id)}>Trocar / remanejar</button>}</div>;
               })}</div>;
           })}</div></section>;
       })}</div>
-      {data.configured && <section className="panel wings-roster"><div><h2>Efetivo e mudanças programadas</h2><p>Veja a ala deste mês e a que será usada no próximo. Use “Trocar” para incluir ou remanejar um militar.</p></div>
-        <div className="table-wrap"><table><thead><tr><th>Militar</th><th>Neste mês</th><th>Próximo mês</th><th>Situação</th>{editable && <th>Ação</th>}</tr></thead><tbody>{members.map((member) => {
+      {data.configured && <section className="panel wings-roster"><div><h2>Efetivo e mudanças programadas</h2><p>Compare {monthLabel(start)} com {nextMonthLabel}. Cada mudança fica identificada como programada.</p></div>
+        <div className="table-wrap"><table className="wing-roster-table"><thead><tr><th>Militar</th><th>{monthLabel(start)}</th><th>{nextMonthLabel}</th><th>Situação</th>{editable && <th>Ação</th>}</tr></thead><tbody>{members.map((member) => {
           const current = data.memberships.find((row) => row.member_id === member.id);
           const next = data.nextMemberships.find((row) => row.member_id === member.id);
           const label = (row) => row ? `${wings.find((item) => item.id === row.wing_id)?.name} · ${row.position_number}ª` : 'Sem ala';
-          return <tr key={member.id}><td><strong>{name(member)}</strong></td><td>{label(current)}{current?.temporary && <small className="wing-table-note">Temporária</small>}</td><td>{label(next)}</td><td>{statusLabel[member.operational_status]}</td>
-            {editable && <td><button className="table-button" onClick={() => openMove(member.id)}>{current ? 'Trocar' : 'Incluir na ala'}</button></td>}</tr>;
+          const changed = membershipChanged(current, next);
+          return <tr key={member.id} className={lastChangedMembers.includes(member.id) ? 'recently-saved' : ''}><td className="wing-roster-member"><strong>{name(member)}</strong></td><td data-label={monthLabel(start)}>{label(current)}{current?.temporary && <small className="wing-table-note">Temporária</small>}</td><td data-label={nextMonthLabel} className={changed ? 'wing-future-cell' : ''}><strong>{label(next)}</strong>{changed && <small className="wing-planned-badge">{current ? 'Troca programada' : 'Inclusão programada'}</small>}</td><td data-label="Situação">{statusLabel[member.operational_status]}</td>
+            {editable && <td className="wing-roster-action"><button className="table-button" onClick={() => openMove(member.id)}>{next ? changed ? 'Editar programação' : 'Trocar ala' : 'Incluir na ala'}</button></td>}</tr>;
         })}</tbody></table></div></section>}
     </>}
     {preview && <div className="modal-backdrop"><section className="edit-modal wings-modal" role="dialog" aria-modal="true" aria-label="Conferir alas da escala">
@@ -119,11 +145,11 @@ export default function Wings() {
         {!preview.canApplyCurrentMonth && <p>Esta escala já terminou. O cadastro será aplicado nas próximas gerações.</p>}
       </div>
       {preview.unresolved.length > 0 && <div className="wings-import-notice"><strong>Precisam de conferência</strong>{preview.unresolved.map((item) => <p key={item.memberId}>{item.name}: {item.reason}</p>)}<p>Esses militares poderão ser incluídos manualmente depois do cadastro.</p></div>}
-      <div className="table-wrap"><table><thead><tr><th>Militar</th><th>Ala</th><th>Posição</th><th></th></tr></thead><tbody>{preview.entries.map((item, index) => <tr key={item.memberId}>
-        <td><strong>{item.name}</strong><small className="wing-table-note">{item.source === 'ESCALA' ? 'Identificado na escala' : 'Pelo ciclo ordinário anterior'}</small></td>
-        <td><select aria-label={`Ala de ${item.name}`} value={item.wingId} onChange={(e) => setPreview({ ...preview, entries: preview.entries.map((row, i) => i === index ? { ...row, wingId: Number(e.target.value) } : row) })}>{wings.map((wing) => <option key={wing.id} value={wing.id}>{wing.name}</option>)}</select></td>
-        <td><select aria-label={`Posição de ${item.name}`} value={item.positionNumber} onChange={(e) => setPreview({ ...preview, entries: preview.entries.map((row, i) => i === index ? { ...row, positionNumber: Number(e.target.value) } : row) })}><option value={1}>1ª</option><option value={2}>2ª</option></select></td>
-        <td><button className="table-button" onClick={() => setPreview({ ...preview, entries: preview.entries.filter((row) => row.memberId !== item.memberId) })}>Deixar para depois</button></td></tr>)}</tbody></table></div>
+      <div className="table-wrap"><table className="wing-import-table"><thead><tr><th>Militar</th><th>Ala</th><th>Posição</th><th></th></tr></thead><tbody>{preview.entries.map((item, index) => <tr key={item.memberId}>
+        <td className="wing-import-member"><strong>{item.name}</strong><small className="wing-table-note">{item.source === 'ESCALA' ? 'Identificado na escala' : item.source === 'MANUAL' ? 'Incluído nesta conferência' : 'Pelo ciclo ordinário anterior'}</small></td>
+        <td data-label="Ala"><select disabled={saveImport.isPending} aria-label={`Ala de ${item.name}`} value={item.wingId} onChange={(e) => setPreview({ ...preview, entries: preview.entries.map((row, i) => i === index ? { ...row, wingId: Number(e.target.value) } : row) })}>{wings.map((wing) => <option key={wing.id} value={wing.id}>{wing.name}</option>)}</select></td>
+        <td data-label="Posição"><select disabled={saveImport.isPending} aria-label={`Posição de ${item.name}`} value={item.positionNumber} onChange={(e) => setPreview({ ...preview, entries: preview.entries.map((row, i) => i === index ? { ...row, positionNumber: Number(e.target.value) } : row) })}><option value={1}>1ª</option><option value={2}>2ª</option></select></td>
+        <td className="wing-import-action"><button disabled={saveImport.isPending} className="table-button" onClick={() => setPreview({ ...preview, entries: preview.entries.filter((row) => row.memberId !== item.memberId) })}>Deixar para depois</button></td></tr>)}</tbody></table></div>
       {!preview.entries.length && <p>Nenhum ciclo ordinário identificado. Inclua pelo menos um militar abaixo para começar.</p>}
       <label>Adicionar militar à conferência<select value="" onChange={(e) => { const member = members.find((item) => item.id === Number(e.target.value)); if (member) setPreview({ ...preview, entries: [...preview.entries,
         { memberId: member.id, name: name(member), wingId: wings[0].id, positionNumber: 1, source: 'MANUAL' }] }); }}><option value="">Selecione um militar</option>{members.filter((member) => !preview.entries.some((row) => row.memberId === member.id)).map((member) => <option value={member.id} key={member.id}>{name(member)}</option>)}</select></label>
@@ -144,7 +170,7 @@ export default function Wings() {
         <p className="full-width wings-change-summary">{editing.scope === 'NEXT_MONTH' ? `A mudança será usada nas gerações a partir de ${dateLabel(data.nextMonth.startsAt)}. Se o mês já estiver gerado, aplique com Regerar.`
           : `Apenas os ordinários de ${dateLabel(editing.fromDate)} em diante serão recalculados neste mês. Os extras e os dias anteriores ficam preservados; no próximo mês, volta a ala permanente.`}</p>
         {move.isError && <p className="error full-width" role="alert">{move.error.response?.data?.message || 'Não foi possível salvar a mudança.'}</p>}
-        <div className="form-actions full-width"><button disabled={move.isPending}>{move.isPending ? 'Salvando…' : editing.scope === 'THIS_MONTH' ? 'Aplicar neste mês' : 'Programar troca permanente'}</button><button className="secondary-button" disabled={move.isPending} type="button" onClick={() => setEditing(null)}>Cancelar</button></div>
+        <div className="form-actions full-width"><button disabled={move.isPending}>{move.isPending ? 'Salvando…' : editing.scope === 'THIS_MONTH' ? 'Aplicar neste mês' : 'Salvar para o próximo mês'}</button><button className="secondary-button" disabled={move.isPending} type="button" onClick={() => setEditing(null)}>Cancelar</button></div>
       </form></section></div>}
   </>;
 }

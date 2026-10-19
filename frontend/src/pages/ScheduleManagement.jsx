@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client.js';
 import { useMonthRollover } from '../hooks/useMonthRollover.js';
 import DeleteMonthButton from '../components/DeleteMonthButton.jsx';
+import ConfirmationDialog from '../components/ConfirmationDialog.jsx';
 
 const dateLabel = (date) => new Date(`${date}T00:00`).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', weekday: 'short' });
 const periodLabel = (period) => period === 'DIURNO' ? 'Dia · 07h às 19h' : 'Noite · 19h às 07h';
@@ -20,13 +21,14 @@ export default function ScheduleManagement() {
   const [target, setTarget] = useState('');
   const [deletingMonth, setDeletingMonth] = useState(false);
   const [monthFeedback, setMonthFeedback] = useState('');
+  const [removing, setRemoving] = useState(null);
   const { data: me } = useQuery({ queryKey: ['me'], queryFn: () => api.get('/auth/me').then((response) => response.data.user) });
   const { data: competencies = [] } = useQuery({ queryKey: ['competencies'], queryFn: () => api.get('/competencies').then((response) => response.data.items) });
   const generatedCompetencies = useMemo(() => competencies.filter((item) => item.generated_at), [competencies]);
   useMonthRollover(competencies, competencyId, (id) => {
     setCompetencyId(id);
     setSearchParams({ competency_id: id }, { replace: true });
-  }, Boolean(editor || moving || deletingMonth));
+  }, Boolean(editor || moving || deletingMonth || removing));
   const { data: schedule, isLoading } = useQuery({
     queryKey: ['schedule-management', competencyId],
     queryFn: () => api.get('/service-slots/manage', { params: { competency_id: competencyId } }).then((response) => response.data),
@@ -69,12 +71,7 @@ export default function ScheduleManagement() {
     setSearchParams({ competency_id: nextId }, { replace: true });
   }, [generatedCompetencies, competencyId, setSearchParams]);
 
-  const refresh = () => {
-    queryClient.invalidateQueries({ queryKey: ['schedule-management', competencyId] });
-    queryClient.invalidateQueries({ queryKey: ['slots', competencyId] });
-    queryClient.invalidateQueries({ queryKey: ['members', 'schedule-management', competencyId] });
-    queryClient.invalidateQueries({ queryKey: ['dashboard'] });
-  };
+  const refresh = () => Promise.all(['schedule-management', 'slots', 'members', 'dashboard'].map((key) => queryClient.invalidateQueries({ queryKey: [key] })));
   const savePosition = useMutation({
     mutationFn: ({ slotId, position, memberId, serviceType }) => api.put(`/service-slots/${slotId}/positions/${position}`, { memberId, serviceType }),
     onSuccess: () => { refresh(); setEditor(null); setSelectedMemberId(''); }
@@ -87,8 +84,21 @@ export default function ScheduleManagement() {
     mutationFn: ({ assignmentId, serviceType }) => api.patch(`/service-slots/assignments/${assignmentId}/type`, { serviceType }),
     onSuccess: refresh
   });
+  const removePosition = useMutation({
+    mutationFn: ({ slot, position }) => api.put(`/service-slots/${slot.id}/positions/${position}`, { memberId: null }),
+    onSuccess: async (_response, { slot, position }) => {
+      // Reflect the empty position immediately, keeping every other position intact.
+      queryClient.setQueryData(['schedule-management', competencyId], (current) => current ? { ...current,
+        items: current.items.map((item) => item.id === slot.id ? { ...item, assignments: item.assignments.filter((assignment) => assignment.positionNumber !== position) } : item)
+      } : current);
+      setRemoving(null);
+      setMonthFeedback(`${dateLabel(slot.service_date)} · ${periodLabel(slot.period)} · ${position}ª posição: militar retirado. A vaga ficou aberta.`);
+      await refresh();
+    }
+  });
 
   const openEditor = (slot, position, assignment = null) => {
+    savePosition.reset();
     setEditor({ slot, position, assignment });
     setSelectedMemberId(assignment ? String(assignment.memberId) : '');
     setSelectedServiceType(assignment?.serviceType || 'EXTRAORDINARY');
@@ -98,8 +108,8 @@ export default function ScheduleManagement() {
     savePosition.mutate({ slotId: editor.slot.id, position: editor.position, memberId: Number(selectedMemberId), serviceType: selectedServiceType });
   };
   const removeAssignment = (slot, position, assignment) => {
-    if (!window.confirm(`Retirar ${assignment.rank} ${assignment.operationalName} desta vaga?`)) return;
-    savePosition.mutate({ slotId: slot.id, position, memberId: null });
+    removePosition.reset();
+    setRemoving({ slot, position, assignment });
   };
   const downloadPdf = async () => {
     const response = await api.get('/service-slots/pdf', { params: { competency_id: competencyId }, responseType: 'blob' });
@@ -111,6 +121,7 @@ export default function ScheduleManagement() {
     URL.revokeObjectURL(url);
   };
   const actionError = savePosition.error || moveAssignment.error || changeServiceType.error;
+  const actionPending = savePosition.isPending || moveAssignment.isPending || changeServiceType.isPending || removePosition.isPending;
 
   return <>
     <header className="page-header"><div><span className="eyebrow">ADMINISTRAÇÃO DA ESCALA</span><h1>Gerenciar escala</h1><p>Edite a planilha mensal: inclua, troque, mova ou retire militares de qualquer vaga aberta.</p></div>
@@ -120,7 +131,7 @@ export default function ScheduleManagement() {
         }} />}</div>
     </header>
 
-    <section className="panel schedule-manager-filter"><div><span className="eyebrow">MÊS DA ESCALA</span><h2>{schedule?.competency?.name || 'Selecione o mês'}</h2><p>Somente meses já gerados aparecem aqui. O PDF usa o mesmo layout encaminhado pelo WhatsApp.</p></div><label>Competência<select disabled={!generatedCompetencies.length} value={competencyId} onChange={(event) => { const id = event.target.value; setCompetencyId(id); setSearchParams({ competency_id: id }, { replace: true }); }}>{!generatedCompetencies.length && <option value="">Nenhum mês gerado</option>}{generatedCompetencies.map((competency) => <option key={competency.id} value={competency.id}>{competency.name}</option>)}</select></label></section>
+    <section className="panel schedule-manager-filter"><div><span className="eyebrow">MÊS DA ESCALA</span><h2>{schedule?.competency?.name || 'Selecione o mês'}</h2><p>Somente meses já gerados aparecem aqui. O PDF usa o mesmo layout encaminhado pelo WhatsApp.</p></div><label>Competência<select disabled={!generatedCompetencies.length || actionPending || Boolean(removing || editor || moving || deletingMonth)} value={competencyId} onChange={(event) => { const id = event.target.value; setCompetencyId(id); setSearchParams({ competency_id: id }, { replace: true }); }}>{!generatedCompetencies.length && <option value="">Nenhum mês gerado</option>}{generatedCompetencies.map((competency) => <option key={competency.id} value={competency.id}>{competency.name}</option>)}</select></label></section>
 
     {!editable && <p className="error">Seu perfil pode consultar a escala e baixar o PDF, mas as alterações são restritas a administradores e escalantes.</p>}
     {monthFeedback && <p className="success" role="status">{monthFeedback}</p>}
@@ -138,7 +149,7 @@ export default function ScheduleManagement() {
               {[1, 2, 3, 4].map((position) => {
                 const assignment = slot.assignments?.find((item) => item.positionNumber === position);
                 const locked = position > Number(slot.current_capacity);
-                return <ScheduleCell key={position} slot={slot} position={position} assignment={assignment} locked={locked} editable={editable}
+                return <ScheduleCell key={position} slot={slot} position={position} assignment={assignment} locked={locked} editable={editable} actionPending={actionPending}
                   onAdd={() => openEditor(slot, position)} onReplace={() => openEditor(slot, position, assignment)}
                   onMove={() => { setMoving({ slot, position, assignment }); setTarget(''); }} onRemove={() => removeAssignment(slot, position, assignment)}
                   onToggleType={() => changeServiceType.mutate({ assignmentId: assignment.id, serviceType: assignment.serviceType === 'ORDINARY' ? 'EXTRAORDINARY' : 'ORDINARY' })} typePending={changeServiceType.isPending} />;
@@ -148,6 +159,13 @@ export default function ScheduleManagement() {
         </div>)}</div>
       {!days.length && <p className="empty-table">Não há horários preparados neste mês.</p>}
     </section>}
+
+    {removing && <ConfirmationDialog title={`Retirar ${removing.assignment.rank} ${removing.assignment.operationalName}?`}
+      pending={removePosition.isPending} pendingLabel="Retirando…" confirmLabel="Retirar desta vaga" onClose={() => setRemoving(null)}
+      onConfirm={() => removePosition.mutate(removing)} error={removePosition.error ? removePosition.error.response?.data?.message || 'Não foi possível retirar o militar. Tente novamente.' : ''}>
+      <p className="confirmation-context">{schedule?.competency?.name}<br />{dateLabel(removing.slot.service_date)} · {periodLabel(removing.slot.period)}<br /><strong>{removing.position}ª posição · {removing.assignment.serviceType === 'ORDINARY' ? 'Ordinário' : 'Extra'}</strong></p>
+      <p>Somente esta marcação será retirada. A posição ficará vaga e os outros militares continuarão nas mesmas posições.</p>
+    </ConfirmationDialog>}
 
     {editor && <div className="modal-backdrop" role="presentation"><section className="edit-modal schedule-action-modal" role="dialog" aria-modal="true" aria-label="Definir militar da vaga"><div className="modal-header"><div><span className="eyebrow">{editor.assignment ? 'TROCAR MILITAR' : 'PREENCHER VAGA'}</span><h2>{dateLabel(editor.slot.service_date)} · {periodLabel(editor.slot.period)} · Posição {editor.position}</h2></div><button className="close-button" onClick={() => setEditor(null)} aria-label="Fechar">×</button></div>
       <p className="modal-copy">{editor.assignment ? `Substitui ${editor.assignment.rank} ${editor.assignment.operationalName}.` : 'Escolha um militar ativo e autorizado para confirmar nesta vaga.'}</p>
@@ -163,9 +181,18 @@ export default function ScheduleManagement() {
   </>;
 }
 
-function ScheduleCell({ slot, position, assignment, locked, editable, onAdd, onReplace, onMove, onRemove, onToggleType, typePending }) {
-  if (locked) return <div className="schedule-cell locked">Trancada</div>;
-  if (!assignment) return <div className="schedule-cell vacancy"><span>Vaga</span>{editable && <button type="button" className="table-button" onClick={onAdd}>Adicionar</button>}</div>;
+function ScheduleCell({ slot, position, assignment, locked, editable, onAdd, onReplace, onMove, onRemove, onToggleType, typePending, actionPending }) {
+  if (locked) return <div className="schedule-cell locked" data-position={`${position}ª posição`}>Trancada</div>;
+  if (!assignment) return <div className="schedule-cell vacancy" data-position={`${position}ª posição`}><span>Vaga</span>{editable && <button type="button" className="table-button" disabled={actionPending} onClick={onAdd}>Adicionar</button>}</div>;
   const extraAssignment = assignment.serviceType === 'EXTRAORDINARY';
-  return <div className={`schedule-cell occupied ${extraAssignment ? 'extra-assignment' : ''}`}><div className="schedule-assignment-title"><strong>{assignment.rank} {assignment.operationalName}{assignment.displayPrefix ? ` (${assignment.displayPrefix})` : ''}</strong><span className={`service-type-badge ${extraAssignment ? 'extra' : 'ordinary'}`}>{extraAssignment ? 'Extra' : 'Ordinário'}</span></div>{editable && <div><button type="button" className="small-action" onClick={onReplace}>Trocar militar</button><button type="button" className="small-action" onClick={onMove}>Posição</button><button type="button" className="small-action" disabled={typePending} onClick={onToggleType}>Mudar tipo</button><button type="button" className="small-action danger" onClick={onRemove}>Retirar</button></div>}</div>;
+  return <div className={`schedule-cell occupied ${extraAssignment ? 'extra-assignment' : ''}`} data-position={`${position}ª posição`}>
+    <div className="schedule-assignment-title"><strong>{assignment.rank} {assignment.operationalName}{assignment.displayPrefix ? ` (${assignment.displayPrefix})` : ''}</strong>
+      <span className={`service-type-badge ${extraAssignment ? 'extra' : 'ordinary'}`}>{extraAssignment ? 'Extra' : 'Ordinário'}</span></div>
+    {editable && <div className="schedule-cell-actions">
+      <button type="button" className="small-action" disabled={actionPending} onClick={onReplace}>Trocar militar</button>
+      <button type="button" className="small-action" disabled={actionPending} onClick={onMove}>Posição</button>
+      <button type="button" className="small-action" disabled={typePending || actionPending} onClick={onToggleType}>Mudar tipo</button>
+      <button type="button" className="small-action danger" disabled={actionPending} aria-label={`Retirar ${assignment.rank} ${assignment.operationalName} da ${position}ª posição de ${dateLabel(slot.service_date)}, ${slot.period === 'DIURNO' ? 'dia' : 'noite'}`} onClick={onRemove}>Retirar</button>
+    </div>}
+  </div>;
 }

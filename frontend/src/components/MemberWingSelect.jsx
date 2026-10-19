@@ -35,7 +35,7 @@ export default function MemberWingSelect({ member, competencyId, data, editable,
     ? `${data.wings.find((wing) => wing.id === next.wing_id)?.name} · ${next.position_number}ª em ${dateLabel(data.nextMonth.startsAt)}` : '';
   return <>
     <select className="status-select wing-select" aria-label={`Ala de ${memberName(member)}`} disabled={!editable || !data}
-      value={current?.wing_id || ''} onChange={(event) => open(event.target.value)}>
+      value={(next || current)?.wing_id || ''} onChange={(event) => open(event.target.value)}>
       <option value="" disabled>Sem ala</option>{data?.wings.map((wing) => <option key={wing.id} value={wing.id}>{wing.name}</option>)}
     </select>
     {futureLabel && <small className="wing-table-note">Programado: {futureLabel}</small>}

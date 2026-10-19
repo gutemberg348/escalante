@@ -1,4 +1,5 @@
-import { Navigate, NavLink, Route, Routes, useNavigate } from 'react-router-dom';
+import { useEffect, useRef, useState } from 'react';
+import { Navigate, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { api } from './api/client.js';
 import Login from './pages/Login.jsx';
@@ -39,17 +40,63 @@ function NavigationIcon({ name }) {
 
 function Layout() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [mobile, setMobile] = useState(() => window.matchMedia('(max-width: 950px)').matches);
+  const sidebar = useRef(null);
+  const main = useRef(null);
+  const menuButton = useRef(null);
+  const closeButton = useRef(null);
   const session = useQuery({ queryKey: ['me'], queryFn: () => api.get('/auth/me').then((response) => response.data.user), retry: false });
+
+  useEffect(() => {
+    const media = window.matchMedia('(max-width: 950px)');
+    const resize = () => { setMobile(media.matches); if (!media.matches) setMenuOpen(false); };
+    media.addEventListener('change', resize);
+    return () => media.removeEventListener('change', resize);
+  }, []);
+  useEffect(() => { setMenuOpen(false); }, [location.pathname]);
+  useEffect(() => {
+    if (sidebar.current) sidebar.current.inert = mobile && !menuOpen;
+    if (main.current) main.current.inert = mobile && menuOpen;
+  }, [mobile, menuOpen, session.isLoading]);
+  useEffect(() => {
+    if (!mobile || !menuOpen) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    closeButton.current?.focus();
+    const keydown = (event) => {
+      if (event.key === 'Escape') { event.preventDefault(); setMenuOpen(false); }
+      if (event.key !== 'Tab') return;
+      const focusable = [...(sidebar.current?.querySelectorAll('a[href],button:not([disabled])') || [])];
+      const first = focusable[0];
+      const last = focusable.at(-1);
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+    };
+    document.addEventListener('keydown', keydown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener('keydown', keydown);
+      if (main.current) main.current.inert = false;
+      if (window.matchMedia('(max-width: 950px)').matches) menuButton.current?.focus();
+    };
+  }, [mobile, menuOpen]);
+
   if (session.isLoading) return <div className="centered">Carregando...</div>;
   if (session.isError) return <Navigate to="/login" replace />;
   const logout = async () => { await api.post('/auth/logout'); navigate('/login'); };
 
-  return <div className="shell"><aside>
-    <div className="brand"><span className="brand-mark">C</span><span className="brand-name">ESCALA</span></div>
+  const currentPage = links.find(([to]) => location.pathname === to)?.[1] || 'Central de operação';
+  return <div className="shell">
+    {mobile && menuOpen && <button type="button" className="navigation-backdrop" tabIndex={-1} aria-label="Fechar menu lateral" onClick={() => setMenuOpen(false)} />}
+    <aside ref={sidebar} id="app-navigation" className={`app-sidebar${menuOpen ? ' is-open' : ''}`} role={mobile ? 'dialog' : undefined} aria-modal={mobile && menuOpen ? true : undefined} aria-hidden={mobile && !menuOpen ? true : undefined} aria-label="Menu principal">
+    <div className="sidebar-head"><div className="brand"><span className="brand-mark">C</span><span className="brand-name">ESCALA</span></div>
+      <button ref={closeButton} type="button" className="mobile-menu-close" aria-label="Fechar menu" onClick={() => setMenuOpen(false)}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg></button></div>
     <div className="nav-label">OPERAÇÃO</div>
-    <nav>{links.map(([to, label, icon]) => <NavLink key={to} to={to}><span className="nav-icon"><NavigationIcon name={icon} /></span>{label}</NavLink>)}</nav>
-    <div className="sidebar-foot"><div className="environment"><span />Ambiente de simulação</div><div className="user"><div className="avatar">{session.data.name.slice(0, 1)}</div><div><strong>{session.data.name}</strong><span>{session.data.role.replaceAll('_', ' ')}</span></div><button className="link" title="Sair" onClick={logout}>↗</button></div></div>
-  </aside><main><div className="topbar"><div><span className="eyebrow">CICC / GESTÃO DE ESCALA</span><strong>Central de operação</strong></div><div className="topbar-status"><span />Sistema operacional</div></div>
+    <nav aria-label="Páginas do painel">{links.map(([to, label, icon]) => <NavLink key={to} to={to} onClick={() => setMenuOpen(false)}><span className="nav-icon"><NavigationIcon name={icon} /></span><span className="nav-link-label">{label}</span></NavLink>)}</nav>
+    <div className="sidebar-foot"><div className="environment"><span />Ambiente de simulação</div><div className="user"><div className="avatar">{session.data.name.slice(0, 1)}</div><div><strong>{session.data.name}</strong><span>{session.data.role.replaceAll('_', ' ')}</span></div><button className="link" title="Sair" aria-label="Sair da conta" onClick={logout}>↗</button></div></div>
+  </aside><main ref={main} aria-hidden={mobile && menuOpen ? true : undefined}><div className="topbar"><div className="topbar-start"><button ref={menuButton} type="button" className="mobile-menu-toggle" aria-label="Abrir menu de navegação" aria-expanded={mobile && menuOpen} aria-controls="app-navigation" onClick={() => setMenuOpen(true)}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" /></svg></button><div><span className="eyebrow">CICC / GESTÃO DE ESCALA</span><strong>{currentPage}</strong></div></div><div className="topbar-status"><span /><span className="topbar-status-label">Sistema operacional</span></div></div>
     <div className="page-content"><Routes>
       <Route path="/alas" element={<Wings />} />
       <Route path="/dashboard" element={<Dashboard />} /><Route path="/efetivo" element={<Members />} /><Route path="/antiguidade" element={<Seniority />} /><Route path="/competencias" element={<Competencies />} /><Route path="/horarios" element={<ServiceSlots />} /><Route path="/gerenciar-escala" element={<ScheduleManagement />} /><Route path="/whatsapp" element={<WhatsApp />} /><Route path="/configuracoes" element={<Settings />} /><Route path="*" element={<Navigate to="/dashboard" replace />} />

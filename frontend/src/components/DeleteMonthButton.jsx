@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client.js';
+import ConfirmationDialog from './ConfirmationDialog.jsx';
 
 export default function DeleteMonthButton({ competencyId, onDeleted, onOpenChange = () => {} }) {
   const client = useQueryClient();
@@ -22,17 +23,16 @@ export default function DeleteMonthButton({ competencyId, onDeleted, onOpenChang
   return <>
     <button type="button" className="secondary-button danger-table-button" disabled={!competencyId || remove.isPending}
       onClick={() => { remove.reset(); setTargetId(Number(competencyId)); onOpenChange(true); }}>Excluir mês</button>
-    {targetId && <div className="modal-backdrop"><section className="edit-modal" role="dialog" aria-modal="true" aria-label="Excluir mês da escala">
-      <div className="modal-header"><h2>Excluir {impact.data?.competency.name || 'mês'}?</h2><button type="button" className="close-button" aria-label="Fechar" disabled={remove.isPending} onClick={close}>×</button></div>
+    {targetId && <ConfirmationDialog title={`Excluir ${impact.data?.competency.name || 'mês'}?`}
+      pending={remove.isPending} confirmDisabled={!impact.data || impact.isFetching || impact.isError}
+      confirmLabel="Excluir mês e marcações" onClose={close} onConfirm={() => remove.mutate()}
+      error={(impact.error || remove.error) ? (impact.error || remove.error).response?.data?.message || 'Não foi possível excluir o mês.' : ''}>
       {impact.isLoading && <p>Conferindo marcações…</p>}
       {impact.data && <>
         <p>Serão excluídos todos os horários e as {impact.data.assignments} marcações deste mês: {impact.data.ordinaryAssignments} ordinárias e {impact.data.extraordinaryAssignments} extras.</p>
         <p>Essa exclusão é permanente. O cadastro dos militares e das alas será mantido.</p>
         {impact.data.activeOnWhatsApp && <p>Este é o mês ativo no WhatsApp. A fila será encerrada e outro mês disponível será selecionado.</p>}
       </>}
-      {(impact.error || remove.error) && <p className="error" role="alert">{(impact.error || remove.error).response?.data?.message || 'Não foi possível excluir o mês.'}</p>}
-      <div className="form-actions"><button type="button" className="secondary-button" disabled={remove.isPending} onClick={close}>Cancelar</button>
-        <button type="button" className="danger-button" disabled={!impact.data || impact.isFetching || remove.isPending} onClick={() => remove.mutate()}>{remove.isPending ? 'Excluindo…' : 'Excluir mês e marcações'}</button></div>
-    </section></div>}
+    </ConfirmationDialog>}
   </>;
 }

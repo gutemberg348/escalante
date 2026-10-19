@@ -47,6 +47,8 @@ A exclusão remove permanentemente o mês, seus horários, suas marcações e se
 
 Se o mês excluído estava ativo no WhatsApp, a fila é encerrada e outro mês gerado é selecionado. Se não restar nenhum mês, a seleção fica vazia até uma nova geração. Falhas durante a exclusão desfazem toda a operação.
 
+No celular, **Gerenciar escala** organiza as posições em cartões por data e turno, com botões maiores. **Retirar** abre uma confirmação com militar, dia, turno e posição; a retirada deixa apenas aquela posição vaga. A confirmação de retirada e a de exclusão do mês mantêm os botões visíveis, permitem rolar o conteúdo e mostram eventuais erros na própria janela.
+
 ## Trocar ou remanejar um militar
 
 Na página **Efetivo**, a coluna **Ala** tem um seletor com as alas 1 a 5, semelhante ao de Situação. Escolher uma ala abre uma confirmação, sem salvar imediatamente. A janela permite conferir a posição, trocar com outro militar e programar a mudança a partir do próximo mês. Também há a opção de aplicá-la às datas restantes da escala selecionada. Nesse caso, a mudança atual e a futura são salvas juntas; se houver conflito, nenhuma delas será salva. A tabela indica a mudança programada abaixo do seletor.
@@ -54,6 +56,10 @@ Na página **Efetivo**, a coluna **Ala** tem um seletor com as alas 1 a 5, semel
 Antes da primeira mudança individual, faça o cadastro inicial em **Alas → Cadastrar militares nas alas**. Somente administradores e responsáveis pela escala podem alterar alas.
 
 Clique em **Trocar / remanejar** ou use a tabela **Efetivo e mudanças programadas**.
+
+As abas **Mês selecionado** e **Próximo mês** mostram os integrantes nas alas correspondentes. Depois de salvar uma mudança futura, a tela abre o próximo mês e mostra a nova ala e posição; inclusões e trocas recebem a indicação **Programada**. Quem já tem uma inclusão futura aparece com **Editar programação**, mesmo que ainda esteja sem ala no mês atual. Se o próximo mês já estiver gerado, é necessário regerá-lo para atualizar os serviços publicados.
+
+No celular, a comparação entre meses e a conferência inicial usam cartões por militar. O menu principal abre lateralmente pelo botão no topo e fecha ao escolher uma página ou tocar fora.
 
 - **Próximo mês em diante:** altera a ala permanente nas próximas gerações. O mês selecionado fica preservado. Se o próximo mês já foi gerado, use Regerar nesse mês.
 - **Somente este mês:** escolha uma data, de hoje em diante, dentro da competência. Recalcula apenas os ordinários dos militares envolvidos a partir dessa data; o mês seguinte usa novamente a ala permanente.
