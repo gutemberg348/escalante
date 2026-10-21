@@ -9,6 +9,7 @@ import { buildSchedulePdf } from './schedule-pdf.js';
 import { parseMarkingRequest } from './marking-choices.js';
 import { parseRequestedMonth } from './month-selector.js';
 import { sendGroupDocument } from './whatsapp-delivery.js';
+import { isUndoCommand, recordWhatsAppCommand, undoLastWhatsAppCommand } from './command-history.js';
 import { applyVacationToCompetency } from '../scheduling/member-status.js';
 import { regenerateOrdinaryAssignments, previewMonthGeneration } from '../scheduling/monthly.js';
 export { parseNaturalChoices } from './marking-choices.js';
@@ -843,7 +844,8 @@ export async function handleIncomingMessages(socket, { messages }) {
     const directTarget = await mentionedMember(socket, message);
     const markingSchedulePlan = parseMarkingSchedulePlan(directMultilineText);
     const memberStatusRequest = parseMemberStatusCommand(directText);
-    const groupAdministrator = memberStatusRequest
+    const undoRequest = isUndoCommand(directText);
+    const groupAdministrator = memberStatusRequest || undoRequest
       ? await senderIsGroupAdministrator(socket, message)
       : false;
     const multiTargetRequest = directTarget.targets?.length > 1 && isDelegatedMarkingText(directText);
@@ -853,14 +855,14 @@ export async function handleIncomingMessages(socket, { messages }) {
       || Boolean(memberStatusRequest);
     // Ao responder a mensagem de um militar, um pedido novo sem outro @militar
     // usa o autor citado como alvo. Um @militar explícito continua prioritário.
-    const quotedTargetIdentity = !directTarget.required && hasDirectMarkingRequest && quotedCandidate
+    const quotedTargetIdentity = !undoRequest && !directTarget.required && hasDirectMarkingRequest && quotedCandidate
       ? await resolveMemberIdentityWithMapping(socket, quotedCandidate.key)
       : null;
     // A new command takes precedence over a quoted message. Quoting a request
     // and only calling the bot still delegates to the original author.
     const hasDirectRequest = directTarget.required || directChoices.length > 0 || Boolean(directSelection.error)
       || directText.startsWith('/') || isDelegatedMarkingText(directText) || isDelegatedRemovalText(directText)
-      || isAssignmentChangeText(directText) || Boolean(markingSchedulePlan) || Boolean(memberStatusRequest);
+      || isAssignmentChangeText(directText) || Boolean(markingSchedulePlan) || Boolean(memberStatusRequest) || undoRequest;
     const quotedRequest = hasDirectRequest ? null : quotedCandidate;
     const effectiveBody = quotedRequest?.body ?? body;
     const explicitSlash = effectiveBody.startsWith('/');
@@ -889,7 +891,9 @@ export async function handleIncomingMessages(socket, { messages }) {
     const actorIdentity = originalIdentity.member ? originalIdentity : quotedRequest
       ? await resolveMemberIdentityWithMapping(socket, message.key) : identity;
     const panelAdministrator = isConfiguredAdministrator(actorIdentity.member);
-    const reply = identity.member
+    const reply = await recordWhatsAppCommand({ groupJid: remoteJid, actorMemberId: actorIdentity.member?.id,
+      messageId: processedMessageId, commandText,
+      permission: groupAdministrator ? 'GROUP_ADMIN' : panelAdministrator ? 'PANEL_ADMIN' : 'SELF' }, async () => identity.member
       ? isAssignmentChangeText(directText)
         ? await changeExtraAssignment(socket, message, body, directText,
           directTarget.targets?.length ? directTarget.targets : targetMember ? [{ member: targetMember }] : [], identity.member)
@@ -910,7 +914,7 @@ export async function handleIncomingMessages(socket, { messages }) {
         })
       : quotedRequest
         ? 'O autor da mensagem citada não está cadastrado no efetivo.'
-        : 'Seu telefone não está cadastrado no efetivo. Peça ao escalante para preencher seu número no painel.';
+        : 'Seu telefone não está cadastrado no efetivo. Peça ao escalante para preencher seu número no painel.');
     if (reply?.type === 'TEXT') {
       const sent = await socket.sendMessage(remoteJid, { text: reply.text, mentions: reply.mentions ?? [] }, { quoted: message });
       logOutboundMessage(socket, sent, remoteJid, reply.text);
@@ -1100,6 +1104,8 @@ Para escolher o mês: */marcar dia 20 noite no mês que vem*, *dia 20 em novembr
 Sem mês, usa a seleção do WhatsApp. Um mês na marcação vale somente para aquele pedido.
 
 Outros atalhos:
+*/desfazer* ou *@Escalante última forma* - desfaz sua última alteração neste grupo
+Consultas não contam como alteração. Se os mesmos dados já mudaram, o bot bloqueia a reversão.
 */status* - consulta seu cadastro
 */minhas* - suas marcações
 */horas @pessoa* - horas e horários confirmados de um militar
@@ -1228,7 +1234,10 @@ async function handleMonthGenerationAnswer(socket, message, body, originalIdenti
   if (!isConfiguredAdministrator(identity.member)) return { handled: true, text: 'Somente administradores configurados no painel WhatsApp podem gerar a escala.' };
   if (!Number.isFinite(pending.expiresAt) || Date.now() > pending.expiresAt) return { handled: true, text: 'Essa pergunta expirou. Peça para gerar a escala novamente.' };
   if (!yes) return { handled: true, text: 'Geração cancelada. Nenhuma escala foi alterada.' };
-  try { return { handled: true, text: await generateNextMonthFromGroup(pending.target, pending.action, message.key.remoteJid) }; }
+  try { return { handled: true, text: await recordWhatsAppCommand({ groupJid: message.key.remoteJid,
+    actorMemberId: identity.member.id, messageId: message.key.id,
+    commandText: `${pending.action === 'REGENERATE' ? 'Regerar' : 'Gerar'} escala ${pending.target}`, permission: 'PANEL_ADMIN' },
+    () => generateNextMonthFromGroup(pending.target, pending.action, message.key.remoteJid)) }; }
   catch (error) {
     if (error.status) return { handled: true, text: error.message };
     console.error('Falha ao gerar/publicar o próximo mês:', error);
@@ -1329,6 +1338,21 @@ async function saveAndStartMarkingSchedulePlan(plan, requestedBy) {
 }
 
 async function executeCommand(member, rawBody, { explicitSlash = false, targetMember = null, requiresTarget = false, groupAdministrator = false, panelAdministrator = false, actorMemberId = null, groupJid = null } = {}) {
+  if (isUndoCommand(rawBody)) {
+    const undone = undoLastWhatsAppCommand({ groupJid, actorMemberId, panelAdministrator, groupAdministrator });
+    const competency = undone.competencyIds?.length === 1
+      ? db.prepare('SELECT * FROM competencies WHERE id=? AND generated_at IS NOT NULL').get(undone.competencyIds[0]) : null;
+    if (competency) {
+      try {
+        const pdf = await commandMonthContext.run({ competency }, () => schedulePdfMessage());
+        if (pdf?.type === 'PDF') return { type: 'TEXT', text: undone.text, pdf };
+      } catch (error) {
+        console.error('Alteração desfeita, mas não foi possível preparar o PDF:', error.message);
+        return `${undone.text}\nO PDF não ficou disponível agora. Consulte /escala ${String(competency.month).padStart(2, '0')}/${competency.year}.`;
+      }
+    }
+    return undone.text;
+  }
   if (requiresTarget && !targetMember) return 'Não identifiquei o militar marcado. Nenhuma marcação foi feita.';
   const commandBody = rawBody.trim().replace(/^\/+/, '').trim();
   const decoratedRequest = extractDisplayPrefix(commandBody);

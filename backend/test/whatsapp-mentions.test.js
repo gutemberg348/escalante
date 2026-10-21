@@ -43,7 +43,8 @@ let sequence = 0;
 let replies;
 let socket;
 beforeEach(() => {
-  db.exec(`DELETE FROM assignments;
+  db.exec(`DELETE FROM whatsapp_command_history;
+    DELETE FROM assignments;
     DELETE FROM processed_messages;
     DELETE FROM whatsapp_messages;
     DELETE FROM member_whatsapp_identities;
@@ -102,6 +103,99 @@ function addConfirmedAssignment({ memberId = 18, day = 20, period = 'NOTURNO', s
     `TEST-ASSIGNMENT-${++assignmentSequence}`, stamp, stamp, stamp);
 }
 const phrase = '@Escalante marque @Alex Bombeiro no dia 20, 24 horas';
+
+for (const undoCommand of ['/desfazer', '@Escalante última forma', '/desfaz ultima marcacao']) {
+  test(`${undoCommand} restores the whole previous 24h booking and sends its PDF`, async () => {
+    await receive('@Escalante marque @Alex dia 20 24h', [bot, alex]);
+    assert.deepEqual(assignedIds(), [18, 18]);
+    await receive('/escala', []);
+    await receive(undoCommand, undoCommand.startsWith('/') ? [] : [bot]);
+    assert.deepEqual(assignedIds(), []);
+    assert.match(replies.filter((item) => item.text).at(-1).text, /ÚLTIMA AÇÃO DESFEITA/);
+    assert.ok(replies.at(-1).document);
+    await receive('/desfazer', []);
+    assert.match(replies.at(-1).text, /não tem alteração/);
+  });
+}
+
+test('ultima forma replying to a previous bot command does not repeat the quoted booking', async () => {
+  await receive('@Escalante marque @Alex dia 20 dia', [bot, alex]);
+  await receive('última forma', [], { participant: bot, quotedMessage: { conversation: '@Escalante marque @Alex dia 20 dia' } });
+  assert.deepEqual(assignedIds(), []);
+  assert.match(replies.filter((item) => item.text).at(-1).text, /ÚLTIMA AÇÃO DESFEITA/);
+});
+
+test('undo restores a removed extra in exactly the same column and type', async () => {
+  addConfirmedAssignment({ memberId: 18, day: 20, serviceType: 'EXTRAORDINARY' });
+  const before = db.prepare('SELECT * FROM assignments').all();
+  await receive('@Escalante retirar @Alex dia 20 noite', [bot, alex]);
+  assert.deepEqual(assignedIds(), []);
+  await receive('/desfazer ultima mudanca', []);
+  assert.deepEqual(db.prepare('SELECT * FROM assignments').all(), before);
+});
+
+test('undo reverts a two-member swap as one command', async () => {
+  addConfirmedAssignment({ memberId: 18, day: 20, serviceType: 'EXTRAORDINARY' });
+  addConfirmedAssignment({ memberId: 19, day: 21, period: 'DIURNO', serviceType: 'EXTRAORDINARY' });
+  const before = db.prepare('SELECT * FROM assignments ORDER BY id').all();
+  await receive('@Escalante troque @Alex dia 20 noite com @Outro dia 21 dia', [bot, alex, other]);
+  assert.notDeepEqual(db.prepare('SELECT * FROM assignments ORDER BY id').all(), before);
+  await receive('@Escalante ultima forma', [bot]);
+  assert.deepEqual(db.prepare('SELECT * FROM assignments ORDER BY id').all(), before);
+});
+
+test('undo restores vacation status and removed ordinary services while retaining extras', async () => {
+  socket.groupMetadata = async () => ({ participants: [{ id: sender, admin: 'admin' }] });
+  addConfirmedAssignment({ memberId: 18, day: 20, serviceType: 'ORDINARY' });
+  addConfirmedAssignment({ memberId: 18, day: 21, serviceType: 'EXTRAORDINARY' });
+  const before = db.prepare('SELECT * FROM assignments ORDER BY id').all();
+  await receive('@Escalante férias @Alex', [bot, alex]);
+  assert.equal(db.prepare('SELECT operational_status FROM members WHERE id=18').get().operational_status, 'VACATION');
+  await receive('/desfazer', []);
+  assert.equal(db.prepare('SELECT operational_status FROM members WHERE id=18').get().operational_status, 'ACTIVE');
+  assert.deepEqual(db.prepare('SELECT * FROM assignments ORDER BY id').all(), before);
+});
+
+test('undo preserves another sender changes to the same assignment', async () => {
+  await receive('@Escalante marque @Alex dia 20 noite', [bot, alex]);
+  db.prepare("UPDATE assignments SET display_prefix='ATESTADO' WHERE member_id=18").run();
+  const before = db.prepare('SELECT * FROM assignments').all();
+  await receive('/desfazer', []);
+  assert.match(replies.at(-1).text, /Não foi possível desfazer/);
+  assert.deepEqual(db.prepare('SELECT * FROM assignments').all(), before);
+});
+
+test('undo uses the recorded month even after querying another scale', async () => {
+  const { competency: target } = ensureCompetencySchedule(`${futureYear}-11-01`);
+  db.prepare('UPDATE competencies SET generated_at=? WHERE id=?').run(stamp, target.id);
+  await receive(`@Escalante marque @Alex dia 20 noite mês 11/${futureYear}`, [bot, alex]);
+  await receive('/escala', []);
+  await receive('/desfazer', []);
+  assert.deepEqual(assignedIds(), []);
+  assert.equal(activeCompetency().id, competency.id);
+  assert.equal(replies.at(-1).fileName, `escala-${futureYear}-11.pdf`);
+});
+
+test('undo restores column releases without changing the selected month', async () => {
+  setting.run('whatsapp_admin_member_ids', '[1]', stamp);
+  const before = db.prepare('SELECT * FROM service_slots WHERE competency_id=? ORDER BY id').all(competency.id);
+  await receive('@Escalante abrir quarta coluna dias 5 e 10', [bot]);
+  await receive('/desfazer', []);
+  assert.deepEqual(db.prepare('SELECT * FROM service_slots WHERE competency_id=? ORDER BY id').all(competency.id), before);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM schedule_pdf_column_releases').get().n, 0);
+  assert.equal(activeCompetency().id, competency.id);
+});
+
+test('undo of an explicit WhatsApp month selection restores the previous selection', async () => {
+  setting.run('whatsapp_admin_member_ids', '[1]', stamp);
+  const { competency: target } = ensureCompetencySchedule(`${futureYear}-11-01`);
+  db.prepare('UPDATE competencies SET generated_at=? WHERE id=?').run(stamp, target.id);
+  await receive(`/escala zap 11/${futureYear}`, []);
+  assert.equal(activeCompetency().id, target.id);
+  await receive('/desfazer', []);
+  assert.equal(activeCompetency().id, competency.id);
+  assert.match(replies.at(-1).text, /ÚLTIMA AÇÃO DESFEITA/);
+});
 
 test('direct PN mention records both shifts for Alex, never the sender', async () => {
   await receive(`@${bot.split('@')[0]} marque @${alex.split('@')[0]} no dia 20, 24 horas`);

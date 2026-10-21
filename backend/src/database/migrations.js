@@ -313,6 +313,22 @@ const migrations = [
         CREATE TRIGGER IF NOT EXISTS wing_cycle_continuous_update BEFORE UPDATE ON wing_cycle_rules
         WHEN NEW.mode<>'CONTINUOUS' BEGIN SELECT RAISE(ABORT, 'O ciclo das alas deve ser continuo'); END;`);
     }
+  },
+  {
+    version: '019_whatsapp_command_history',
+    apply() {
+      db.exec(`CREATE TABLE IF NOT EXISTS whatsapp_command_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, group_jid TEXT NOT NULL, actor_member_id INTEGER NOT NULL,
+        message_id TEXT NOT NULL UNIQUE, command_text TEXT NOT NULL, permission TEXT NOT NULL,
+        completed_at TEXT, undone_at TEXT, created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_whatsapp_command_undo ON whatsapp_command_history(group_jid,actor_member_id,id DESC);
+      CREATE TABLE IF NOT EXISTS whatsapp_command_changes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, command_id INTEGER NOT NULL REFERENCES whatsapp_command_history(id) ON DELETE CASCADE,
+        table_name TEXT NOT NULL, key_json TEXT NOT NULL, before_json TEXT, after_json TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_whatsapp_command_changes ON whatsapp_command_changes(command_id,id);`);
+    }
   }
 ];
 

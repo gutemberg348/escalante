@@ -299,6 +299,41 @@ Esses comandos alteram somente serviços EXTRAS. Ordinários ficam protegidos.
    @Escalante passo a vez
 
 
+10. DESFAZER A ÚLTIMA ALTERAÇÃO — ÚLTIMA FORMA
+---------------------------------------------
+
+   /desfazer
+   /desfaz
+   /desfazer ultima acao
+   /desfazer ultima marcacao
+   /desfazer ultima mudanca
+   @Escalante desfazer
+   @Escalante última forma
+   @Escalante ultima forma
+
+Desfaz a última alteração feita POR VOCÊ naquele grupo, mesmo que o mês
+selecionado tenha mudado. Não desfaz comandos de outras pessoas ou de outro grupo.
+Também pode responder à mensagem do bot escrevendo "última forma".
+
+Uma marcação de 24h ou com vários militares é desfeita por inteiro. Também
+restaura retiradas, trocas, remanejamentos, observações, situação do militar,
+colunas, fila e seleção do mês. Gerar ou regerar mês também fica no histórico.
+Consultas como /status, /minhas, /vagas e /escala não substituem a última ação.
+
+Ao desfazer uma mudança na escala, o bot envia o PDF atualizado quando houver
+um único mês afetado e ele ainda existir. O estilo do PDF permanece igual.
+Mensagens e PDFs que já foram enviados não são apagados do WhatsApp.
+
+Se outra pessoa já mexeu nos mesmos dados, a vaga foi ocupada ou o serviço
+foi homologado, o bot bloqueia a reversão sem aplicar mudanças parciais.
+As permissões administrativas são verificadas novamente ao desfazer.
+
+Cada novo /desfazer volta uma ação anterior sua. Não existe comando de refazer.
+O histórico permanece após reiniciar o bot, mas só registra alterações feitas
+depois desta atualização. Se o bot reiniciar durante uma operação, confira a
+escala no painel: comandos interrompidos exigem essa conferência.
+
+
 COMANDOS ADMINISTRATIVOS E DE GESTÃO
 ====================================
 
