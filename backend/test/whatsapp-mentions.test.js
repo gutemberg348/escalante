@@ -989,6 +989,83 @@ test('a configured administrator can use menos as a synonym for exceto', async (
   ]);
 });
 
+for (const selector of ['mês 11', 'novembro', `11/${futureYear}`]) {
+  test(`column commands respect explicit ${selector} without changing the selected month`, async () => {
+    setting.run('whatsapp_admin_member_ids', '[1]', stamp);
+    const { competency: target } = ensureCompetencySchedule(`${futureYear}-11-01`);
+    db.prepare('UPDATE competencies SET generated_at=? WHERE id=?').run(stamp, target.id);
+    await receive(`@Escalante abrir terceira coluna dia 5 no ${selector}`, [bot]);
+    assert.match(replies.at(-1).text, /3ª COLUNA ABERTA/);
+    assert.match(replies.at(-1).text, /05\/11\//);
+    assert.deepEqual(db.prepare('SELECT DISTINCT service_date,current_capacity FROM service_slots WHERE competency_id=? AND current_capacity>2').all(target.id),
+      [{ service_date: `${futureYear}-11-05`, current_capacity: 3 }]);
+    assert.equal(db.prepare('SELECT COUNT(*) n FROM service_slots WHERE competency_id=? AND current_capacity<>2').get(competency.id).n, 0);
+    assert.equal(activeCompetency().id, competency.id);
+    await receive(`/abrir 4 coluna no ${selector} menos dias 5 e 10`, []);
+    assert.equal(db.prepare('SELECT COUNT(*) n FROM service_slots WHERE competency_id=? AND current_capacity=4').get(target.id).n, 56);
+    await receive(`/fechar quarta coluna dias 6 e 7 no ${selector}`, []);
+    assert.equal(db.prepare('SELECT COUNT(*) n FROM service_slots WHERE competency_id=? AND service_date IN (?,?) AND current_capacity=3').get(target.id, `${futureYear}-11-06`, `${futureYear}-11-07`).n, 4);
+    assert.equal(activeCompetency().id, competency.id);
+  });
+}
+
+test('relative next-month column commands use the calendar month instead of the selected future scale', async () => {
+  setting.run('whatsapp_admin_member_ids', '[1]', stamp);
+  const next = new Date(); next.setDate(1); next.setMonth(next.getMonth() + 1);
+  const key = `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, '0')}`;
+  const { competency: target } = ensureCompetencySchedule(`${key}-01`);
+  db.prepare('UPDATE competencies SET generated_at=? WHERE id=?').run(stamp, target.id);
+  for (const phrase of ['do mês que vem', 'no próximo mês', 'no proximi mes', 'do mês seguinte']) {
+    await receive(`@Escalante abrir 3 coluna dia 5 ${phrase}`, [bot]);
+    assert.match(replies.at(-1).text, /3ª COLUNA ABERTA/);
+    assert.match(replies.at(-1).text, new RegExp(`05/${String(next.getMonth() + 1).padStart(2, '0')}/${next.getFullYear()}`));
+  }
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM service_slots WHERE competency_id=? AND current_capacity=3').get(target.id).n, 2);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM service_slots WHERE competency_id=? AND current_capacity<>2').get(competency.id).n, 0);
+  assert.equal(activeCompetency().id, competency.id);
+});
+
+test('invalid and ungenerated column months do not alter the selected scale or create another month', async () => {
+  setting.run('whatsapp_admin_member_ids', '[1]', stamp);
+  const before = db.prepare('SELECT COUNT(*) n FROM competencies').get().n;
+  for (const phrase of ['mês 13', 'novembro e dezembro', 'mês 11/2098']) {
+    await receive(`@Escalante abrir terceira coluna dia 5 no ${phrase}`, [bot]);
+    assert.match(replies.at(-1).text, /inválido|somente um mês|ainda não foi gerada/i);
+    assert.equal(db.prepare('SELECT COUNT(*) n FROM service_slots WHERE current_capacity<>2').get().n, 0);
+  }
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM competencies').get().n, before);
+  assert.equal(activeCompetency().id, competency.id);
+});
+
+test('explicit month does not bypass the panel administrator permission for columns', async () => {
+  await receive('@Escalante abrir terceira coluna dia 5 do próximo mês', [bot]);
+  assert.match(replies.at(-1).text, /Somente administradores configurados/);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM service_slots WHERE current_capacity<>2').get().n, 0);
+  assert.equal(activeCompetency().id, competency.id);
+});
+
+test('occupied-column confirmation retains the explicit target month when resent', async () => {
+  setting.run('whatsapp_admin_member_ids', '[1]', stamp);
+  const { competency: target } = ensureCompetencySchedule(`${futureYear}-11-01`);
+  db.prepare('UPDATE competencies SET generated_at=? WHERE id=?').run(stamp, target.id);
+  await receive(`@Escalante abrir quarta coluna dia 17 mês 11/${futureYear}`, [bot]);
+  const slot = db.prepare("SELECT id FROM service_slots WHERE competency_id=? AND service_date=? AND period='DIURNO'").get(target.id, `${futureYear}-11-17`);
+  db.prepare(`INSERT INTO assignments (service_slot_id,position_number,member_id,service_type,status,protocol,confirmed_at,created_at,updated_at)
+    VALUES (?,4,18,'EXTRAORDINARY','CONFIRMED','NEXT-MONTH-COLUMN',?,?,?)`).run(slot.id, stamp, stamp, stamp);
+  await receive(`@Escalante fechar quarta coluna dia 17 mês 11/${futureYear}`, [bot]);
+  const warning = replies.at(-1).text;
+  assert.match(warning, /NÃO FOI FECHADA/);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM assignments').get().n, 1);
+  const confirmation = warning.match(/\*(@Escalante fechar[^*]+EXCLUA)\*/)?.[1];
+  assert.ok(confirmation);
+  assert.ok(confirmation.includes(`11/${futureYear}`));
+  await receive(confirmation, [bot]);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM assignments').get().n, 0);
+  assert.equal(db.prepare('SELECT current_capacity FROM service_slots WHERE id=?').get(slot.id).current_capacity, 3);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM service_slots WHERE competency_id=? AND current_capacity<>2').get(competency.id).n, 0);
+  assert.equal(activeCompetency().id, competency.id);
+});
+
 test('closing an occupied column warns first and only deletes after EXCLUA', async () => {
   setting.run('whatsapp_admin_member_ids', '[1]', stamp);
   const serviceDate = `${futureYear}-09-17`;

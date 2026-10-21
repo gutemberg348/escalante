@@ -684,7 +684,7 @@ Existem ${assignmentsToRemove.length} marcação(ões) na(s) posição(ões) que
 ${affected.join('\n')}
 
 Para excluir essas marcações e fechar, envie:
-*@Escalante fechar ${request.column}ª coluna ${canonicalDates} EXCLUA*`;
+*@Escalante fechar ${request.column}ª coluna ${canonicalDates} no mês ${String(competency.month).padStart(2, '0')}/${competency.year} EXCLUA*`;
   }
 
   const previous = new Map(db.prepare(`SELECT service_date,third_column_open,fourth_column_open
@@ -728,6 +728,7 @@ Para excluir essas marcações e fechar, envie:
     ? `\n${assignmentsToRemove.length} marcação(ões) excluída(s).`
     : '';
   return `*${request.column}ª COLUNA ${request.action === 'OPEN' ? 'ABERTA' : 'FECHADA'}*
+${competency.name}
 ${dateDescription}${removed}`.trim();
 }
 
@@ -1127,8 +1128,11 @@ Também aceita *licença*, *afastado* e *desativado*.
 Colunas: somente administradores selecionados no painel → WhatsApp → Administradores da escala no WhatsApp.
 *@Escalante abrir 3ª coluna* - abre no mês inteiro
 *@Escalante abrir 4ª coluna dia 17* - abre somente nessa data
+*@Escalante abrir terceira coluna dia 5 do mês que vem* - altera o próximo mês
+*/abrir 3 coluna mês 11* - abre no mês informado, sem trocar a seleção
 *@Escalante abrir 4ª coluna exceto dias 17 e 18* - abre nos demais dias
 *@Escalante fechar 4ª coluna dia 17* - fecha se a posição estiver vazia
+*@Escalante fechar quarta coluna mês que vem menos dias 17 e 18* - fecha nos demais dias desse mês
 Se houver marcações, o bot não fecha e pede uma confirmação terminada em *EXCLUA*.
 
 Envie */comandos* ou apenas *comandos* para ver esta lista.`;
@@ -1344,6 +1348,9 @@ async function executeCommand(member, rawBody, { explicitSlash = false, targetMe
   const columnRequest = parseColumnCommand(commandBody);
   if (columnRequest) {
     if (!panelAdministrator) return 'Somente administradores configurados no painel WhatsApp podem abrir ou fechar colunas.';
+    const request = resolveRequestedMonth(commandBody);
+    if (request.error) return request.error;
+    if (request.requested) return commandMonthContext.run(request, () => applyColumnCommand(parseColumnCommand(request.text), member));
     return applyColumnCommand(columnRequest, member);
   }
   const markingSchedulePlan = parseMarkingSchedulePlan(rawBody);

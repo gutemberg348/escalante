@@ -463,6 +463,22 @@ Abrir somente em datas específicas:
    @Escalante abrir quarta coluna dias 17 e 18
    /abrir 4ª coluna somente dias 5, 10 e 20
 
+Escolher o mês na própria mensagem:
+   @Escalante abrir 3 coluna do mês que vem
+   @Escalante abrir terceira coluna dia 5 do próximo mês
+   @Escalante abrir 3ª coluna dia 5 mês 11
+   @Escalante abrir terceira coluna dias 5 e 10 de novembro
+   /abrir 4 coluna próximo mês
+   /abrir 4ª coluna dia 17 no mês 11/2026
+   @Escalante abrir quarta coluna mês que vem menos dias 17 e 18
+
+Pode usar "próximo mês", "mês que vem", "mês q vem", "mês seguinte", o nome
+do mês ou "mês 11". O erro comum "proximi mes" também é aceito.
+Próximo mês é o mês seguinte ao atual do calendário, mesmo que outra escala
+esteja selecionada no painel. Sem informar dias, abre no mês inteiro.
+O mês precisa estar gerado. O comando informa o mês alterado e não troca o
+mês selecionado para os próximos comandos. Sem mês, usa o selecionado no bot.
+
 Abrir o mês inteiro, menos algumas datas:
    @Escalante abrir 4ª coluna exceto dia 17
    @Escalante abrir quarta coluna exceto dias 17 e 18
@@ -504,6 +520,12 @@ Fechar somente em datas específicas:
    @Escalante fechar quarta coluna dias 17 e 18
    /fechar 4ª coluna somente dias 5, 10 e 20
 
+Fechar escolhendo outro mês na própria mensagem:
+   @Escalante fechar terceira coluna dia 5 do mês que vem
+   @Escalante fechar quarta coluna no próximo mês
+   /fechar 4 coluna dias 5 e 10 mês 11
+   @Escalante fechar quarta coluna novembro menos dias 17 e 18
+
 Fechar o mês inteiro, menos algumas datas:
    @Escalante fechar 4ª coluna exceto dia 17
    @Escalante trancar terceira coluna exceto dias 17 e 18
@@ -524,8 +546,11 @@ Para o mês inteiro, depois de conferir o aviso:
 
    @Escalante fechar 4ª coluna no mês inteiro EXCLUA
 
-Os comandos alteram o mês que está ativo no WhatsApp. Para escolher outro mês,
-use primeiro /escala zap MM/AAAA. /escala MM/AAAA apenas consulta o PDF.
+Sem informar o mês, os comandos alteram o selecionado no WhatsApp. Para uma
+alteração em outro mês, informe o mês na frase. Para trocar a seleção dos
+próximos comandos, use /escala zap MM/AAAA. /escala MM/AAAA só consulta o PDF.
+Se o fechamento pedir EXCLUA, copie a frase completa: ela já contém o mês
+correto, mesmo que outra escala esteja selecionada.
 
 Ao fechar a 3ª coluna, a 4ª também será fechada nos mesmos dias.
 EXCLUA remove as marcações que ocupam as posições fechadas; use somente depois

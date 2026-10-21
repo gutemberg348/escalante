@@ -9,7 +9,8 @@ export function parseRequestedMonth(value, { today = new Date(), defaultYear = t
   const ranges = [];
   const months = [];
   const prefix = '(?:(?:PARA|PRA|PRO|DO|DE|NO|EM)\\s+(?:(?:O|A)\\s+)?)?';
-  const pattern = new RegExp(`\\b${prefix}(PROXIMO\\s+MES|MES\\s+(?:(?:QUE|Q)\\s+)?VEM|(?:ESTE|ESSE|NESTE|NESSE|DESTE|DESSE)\\s+MES|MES\\s+ATUAL|(?:MES\\s+(?:DE\\s+)?)?(?:${names.join('|')})(?:\\s+(?:DE\\s+)?20\\d{2})?|MES\\s+(?:DE\\s+)?\\d{1,2}(?:\\s*(?:/|-|DE|EM)\\s*20\\d{2})?|\\d{1,2}\\s*[/\\-]\\s*20\\d{2}|20\\d{2}-\\d{1,2})\\b`, 'g');
+  const nextMonth = '(?:PROXIM[OI]\\s+MES|MES\\s+(?:(?:QUE|Q)\\s+)?VEM|MES\\s+(?:SEGUINTE|PROXIMO))';
+  const pattern = new RegExp(`\\b${prefix}(${nextMonth}|(?:ESTE|ESSE|NESTE|NESSE|DESTE|DESSE)\\s+MES|MES\\s+ATUAL|(?:MES\\s+(?:DE\\s+)?)?(?:${names.join('|')})(?:\\s+(?:DE\\s+)?20\\d{2})?|MES\\s+(?:DE\\s+)?\\d{1,2}(?:\\s*(?:/|-|DE|EM)\\s*20\\d{2})?|\\d{1,2}\\s*[/\\-]\\s*20\\d{2}|20\\d{2}-\\d{1,2})\\b`, 'g');
   // Full dates retain their day and are also validated by the marking parser.
   for (const match of searchable.matchAll(/\b(\d{1,2})\/(\d{1,2})(?:\/(20\d{2}))?\b/g)) {
     months.push({ month: Number(match[2]), year: Number(match[3] || defaultYear) });
@@ -19,7 +20,7 @@ export function parseRequestedMonth(value, { today = new Date(), defaultYear = t
     const phrase = match[1];
     let month;
     let year = defaultYear;
-    if (/^(?:PROXIMO\s+MES|MES\s+(?:(?:QUE|Q)\s+)?VEM)$/.test(phrase)) {
+    if (new RegExp(`^${nextMonth}$`).test(phrase)) {
       const next = new Date(today.getFullYear(), today.getMonth() + 1, 1);
       month = next.getMonth() + 1;
       year = next.getFullYear();

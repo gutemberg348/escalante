@@ -5,7 +5,7 @@ import { parseMarkingRequest } from '../src/messaging/marking-choices.js';
 
 const options = { today: new Date(2026, 9, 19), defaultYear: 2026 };
 test('month names, numbers and relative phrases leave only the requested day and shift', () => {
-  for (const selector of ['próximo mês', 'mês que vem', 'mes q vem', 'mes vem', 'novembro', 'mês 11', 'mês de novembro', '11/2026', '2026-11']) {
+  for (const selector of ['próximo mês', 'proximi mes', 'mês seguinte', 'mês próximo', 'mês que vem', 'mes q vem', 'mes vem', 'novembro', 'mês 11', 'mês de novembro', '11/2026', '2026-11']) {
     const result = parseRequestedMonth(`marcar dia 20 noite no ${selector}`, options);
     assert.equal(result.month, 11, selector);
     assert.equal(result.year, 2026, selector);
