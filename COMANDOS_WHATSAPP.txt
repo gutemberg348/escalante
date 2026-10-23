@@ -235,6 +235,8 @@ PERMUTA, ATESTADO E DISPENSA COMO OBSERVAÇÃO
 -------------------------------------------
 
    @Escalante permuta @Militar dia 28 (Sgt Pedro Neto)
+   @Escalante permuta @Militar dia 28 dia deste mês por (Sgt Jomar)
+   permuta @Militar dia 28 dia este mês (Sgt Jomar) @Escalante
    @Escalante permuta @Militar dia 28 noite (Sgt Pedro Neto)
    @Escalante atestado @Militar dia 28
    @Escalante dispensado @Militar dia 28
@@ -247,6 +249,10 @@ O nome cadastrado continua no serviço e a observação aparece depois dele:
    Sgt Jansen (Sgt Pedro Neto)
    Sgt Jansen (ATESTADO)
    Sgt Jansen (DISPENSADO)
+
+No painel, a mesma anotação pode ser cadastrada ou editada em Gerenciar escala
+pelo botão Observação do serviço. O campo aceita nome de permuta, ATESTADO,
+DISPENSADO ou outro texto, sempre colocado automaticamente entre parênteses.
 
 Esses comandos registram observações em serviços ORDINÁRIOS ou EXTRAS que já
 existam. Não mudam o militar, a posição, o tipo do serviço nem as horas.

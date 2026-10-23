@@ -399,6 +399,34 @@ for (const [command, label, heading] of [
   });
 }
 
+for (const [monthText, botLast] of [['deste mês', false], ['este mês', true]]) {
+  test(`permuta accepts por before the note with ${monthText} and bot ${botLast ? 'last' : 'first'}`, async () => {
+    const today = new Date();
+    const monthKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
+    const { competency: current } = ensureCompetencySchedule(`${monthKey}-01`);
+    const next = new Date(today.getFullYear(), today.getMonth() + 1, 1);
+    const { competency: selected } = ensureCompetencySchedule(`${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, '0')}-01`);
+    db.prepare('UPDATE competencies SET generated_at=? WHERE id IN (?,?)').run(stamp, current.id, selected.id);
+    setting.run('bot_active_competency_id', String(selected.id), stamp);
+    const daySlot = db.prepare("SELECT id FROM service_slots WHERE competency_id=? AND service_date=? AND period='DIURNO'").get(current.id, `${monthKey}-28`);
+    const nightSlot = db.prepare("SELECT id FROM service_slots WHERE competency_id=? AND service_date=? AND period='NOTURNO'").get(current.id, `${monthKey}-28`);
+    for (const [slot, type] of [[daySlot, 'ORDINARY'], [nightSlot, 'EXTRAORDINARY']]) {
+      db.prepare(`INSERT INTO assignments(service_slot_id,position_number,member_id,service_type,status,protocol,confirmed_at,created_at,updated_at)
+        VALUES (?,1,18,?,'CONFIRMED',?,?,?,?)`).run(slot.id, type, `PERMUTA-POR-${slot.id}`, stamp, stamp, stamp);
+    }
+    const before = db.prepare('SELECT * FROM assignments ORDER BY id').all();
+    const body = `Permuta @~Deus ... Meu Salvador ! dia 28 dia ${monthText} por (Sgt Jomar)`;
+    await receive(botLast ? `${body} @Escalante` : `@Escalante ${body}`, botLast ? [alex, bot] : [bot, alex]);
+    assert.match(replies.at(-1).text, /PERMUTA REGISTRADA/);
+    const after = db.prepare('SELECT * FROM assignments ORDER BY id').all();
+    assert.deepEqual(after.map(({display_prefix,updated_at,...rest})=>rest),before.map(({display_prefix,updated_at,...rest})=>rest));
+    assert.equal(after.find(row=>row.service_slot_id===daySlot.id).display_prefix,'Sgt Jomar');
+    assert.equal(after.find(row=>row.service_slot_id===nightSlot.id).display_prefix,null);
+    assert.equal(activeCompetency().id,selected.id);
+    assert.equal(assignmentCellsBySlot(current.id).get(daySlot.id).names[0],'Sgt Alex (Sgt Jomar)');
+  });
+}
+
 test('a permuta note with a shift changes only that service and leaves other duties intact', async () => {
   addConfirmedAssignment({ day: 28, period: 'DIURNO' });
   addConfirmedAssignment({ day: 28, period: 'NOTURNO' });

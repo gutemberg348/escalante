@@ -5,6 +5,7 @@ import { api } from '../api/client.js';
 import { useMonthRollover } from '../hooks/useMonthRollover.js';
 import DeleteMonthButton from '../components/DeleteMonthButton.jsx';
 import ConfirmationDialog from '../components/ConfirmationDialog.jsx';
+import ObservationDialog from '../components/ObservationDialog.jsx';
 
 const dateLabel = (date) => new Date(`${date}T00:00`).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', weekday: 'short' });
 const periodLabel = (period) => period === 'DIURNO' ? 'Dia · 07h às 19h' : 'Noite · 19h às 07h';
@@ -22,13 +23,14 @@ export default function ScheduleManagement() {
   const [deletingMonth, setDeletingMonth] = useState(false);
   const [monthFeedback, setMonthFeedback] = useState('');
   const [removing, setRemoving] = useState(null);
+  const [observing, setObserving] = useState(null);
   const { data: me } = useQuery({ queryKey: ['me'], queryFn: () => api.get('/auth/me').then((response) => response.data.user) });
   const { data: competencies = [] } = useQuery({ queryKey: ['competencies'], queryFn: () => api.get('/competencies').then((response) => response.data.items) });
   const generatedCompetencies = useMemo(() => competencies.filter((item) => item.generated_at), [competencies]);
   useMonthRollover(competencies, competencyId, (id) => {
     setCompetencyId(id);
     setSearchParams({ competency_id: id }, { replace: true });
-  }, Boolean(editor || moving || deletingMonth || removing));
+  }, Boolean(editor || moving || deletingMonth || removing || observing));
   const { data: schedule, isLoading } = useQuery({
     queryKey: ['schedule-management', competencyId],
     queryFn: () => api.get('/service-slots/manage', { params: { competency_id: competencyId } }).then((response) => response.data),
@@ -71,7 +73,20 @@ export default function ScheduleManagement() {
     setSearchParams({ competency_id: nextId }, { replace: true });
   }, [generatedCompetencies, competencyId, setSearchParams]);
 
-  const refresh = () => Promise.all(['schedule-management', 'slots', 'members', 'dashboard'].map((key) => queryClient.invalidateQueries({ queryKey: [key] })));
+  const refresh = () => Promise.all(['schedule-management', 'slots', 'members', 'dashboard', 'slot-confirmations'].map((key) => queryClient.invalidateQueries({ queryKey: [key] })));
+  const saveObservation = useMutation({
+    mutationFn: ({ assignment, displayPrefix }) => api.patch(`/service-slots/assignments/${assignment.id}/observation`, { displayPrefix, expectedUpdatedAt: assignment.updatedAt }),
+    onSuccess: async (response, { assignment, displayPrefix }) => {
+      queryClient.setQueryData(['schedule-management', competencyId], (current) => current ? { ...current,
+        items: current.items.map((slot) => ({ ...slot, assignments: slot.assignments.map((item) => item.id === assignment.id
+          ? { ...item, displayPrefix: response.data.item.display_prefix, updatedAt: response.data.item.updated_at } : item) }))
+      } : current);
+      setObserving(null);
+      setMonthFeedback(displayPrefix ? 'Observação registrada na escala.' : 'Observação removida da escala.');
+      await refresh();
+    },
+    onError: (error) => { if (error.response?.status === 409) refresh(); }
+  });
   const savePosition = useMutation({
     mutationFn: ({ slotId, position, memberId, serviceType }) => api.put(`/service-slots/${slotId}/positions/${position}`, { memberId, serviceType }),
     onSuccess: () => { refresh(); setEditor(null); setSelectedMemberId(''); }
@@ -121,7 +136,7 @@ export default function ScheduleManagement() {
     URL.revokeObjectURL(url);
   };
   const actionError = savePosition.error || moveAssignment.error || changeServiceType.error;
-  const actionPending = savePosition.isPending || moveAssignment.isPending || changeServiceType.isPending || removePosition.isPending;
+  const actionPending = savePosition.isPending || moveAssignment.isPending || changeServiceType.isPending || removePosition.isPending || saveObservation.isPending;
 
   return <>
     <header className="page-header"><div><span className="eyebrow">ADMINISTRAÇÃO DA ESCALA</span><h1>Gerenciar escala</h1><p>Edite a planilha mensal: inclua, troque, mova ou retire militares de qualquer vaga aberta.</p></div>
@@ -131,7 +146,7 @@ export default function ScheduleManagement() {
         }} />}</div>
     </header>
 
-    <section className="panel schedule-manager-filter"><div><span className="eyebrow">MÊS DA ESCALA</span><h2>{schedule?.competency?.name || 'Selecione o mês'}</h2><p>Somente meses já gerados aparecem aqui. O PDF usa o mesmo layout encaminhado pelo WhatsApp.</p></div><label>Competência<select disabled={!generatedCompetencies.length || actionPending || Boolean(removing || editor || moving || deletingMonth)} value={competencyId} onChange={(event) => { const id = event.target.value; setCompetencyId(id); setSearchParams({ competency_id: id }, { replace: true }); }}>{!generatedCompetencies.length && <option value="">Nenhum mês gerado</option>}{generatedCompetencies.map((competency) => <option key={competency.id} value={competency.id}>{competency.name}</option>)}</select></label></section>
+    <section className="panel schedule-manager-filter"><div><span className="eyebrow">MÊS DA ESCALA</span><h2>{schedule?.competency?.name || 'Selecione o mês'}</h2><p>Somente meses já gerados aparecem aqui. O PDF usa o mesmo layout encaminhado pelo WhatsApp.</p></div><label>Competência<select disabled={!generatedCompetencies.length || actionPending || Boolean(removing || editor || moving || deletingMonth || observing)} value={competencyId} onChange={(event) => { const id = event.target.value; setCompetencyId(id); setSearchParams({ competency_id: id }, { replace: true }); }}>{!generatedCompetencies.length && <option value="">Nenhum mês gerado</option>}{generatedCompetencies.map((competency) => <option key={competency.id} value={competency.id}>{competency.name}</option>)}</select></label></section>
 
     {!editable && <p className="error">Seu perfil pode consultar a escala e baixar o PDF, mas as alterações são restritas a administradores e escalantes.</p>}
     {monthFeedback && <p className="success" role="status">{monthFeedback}</p>}
@@ -165,6 +180,7 @@ export default function ScheduleManagement() {
               <ScheduleCell slot={slot} position={position} assignment={assignment} locked={locked} editable={editable} actionPending={actionPending}
                   onAdd={() => openEditor(slot, position)} onReplace={() => openEditor(slot, position, assignment)}
                   onMove={() => { setMoving({ slot, position, assignment }); setTarget(''); }} onRemove={() => removeAssignment(slot, position, assignment)}
+                  onObservation={() => { saveObservation.reset(); setObserving({ slot, position, assignment }); }}
                   onToggleType={() => changeServiceType.mutate({ assignmentId: assignment.id, serviceType: assignment.serviceType === 'ORDINARY' ? 'EXTRAORDINARY' : 'ORDINARY' })} typePending={changeServiceType.isPending} />
             </section>;
             })}</div>
@@ -172,6 +188,11 @@ export default function ScheduleManagement() {
         </section>)}</div>
       {!days.length && <p className="empty-table">Não há horários preparados neste mês.</p>}
     </section>}
+
+    {observing && <ObservationDialog assignment={observing.assignment} members={members} pending={saveObservation.isPending}
+      contextLabel={`${schedule?.competency?.name} · ${dateLabel(observing.slot.service_date)} · ${periodLabel(observing.slot.period)} · ${observing.position}ª coluna`}
+      error={saveObservation.error ? saveObservation.error.response?.data?.message || 'Não foi possível salvar a observação.' : ''}
+      onClose={() => setObserving(null)} onSave={(displayPrefix) => saveObservation.mutate({ assignment: observing.assignment, displayPrefix })} />}
 
     {removing && <ConfirmationDialog title={`Retirar ${removing.assignment.rank} ${removing.assignment.operationalName}?`}
       pending={removePosition.isPending} pendingLabel="Retirando…" confirmLabel="Retirar desta vaga" onClose={() => setRemoving(null)}
@@ -194,7 +215,7 @@ export default function ScheduleManagement() {
   </>;
 }
 
-function ScheduleCell({ slot, position, assignment, locked, editable, onAdd, onReplace, onMove, onRemove, onToggleType, typePending, actionPending }) {
+function ScheduleCell({ slot, position, assignment, locked, editable, onAdd, onReplace, onMove, onRemove, onToggleType, onObservation, typePending, actionPending }) {
   if (locked) return <div className="roster-position is-locked"><strong>Trancada</strong></div>;
   if (!assignment) return <div className="roster-position is-vacant"><strong>Vaga livre</strong>{editable && <button type="button" className="roster-action roster-add" disabled={actionPending} onClick={onAdd}>+ Adicionar</button>}</div>;
   const extraAssignment = assignment.serviceType === 'EXTRAORDINARY';
@@ -206,6 +227,7 @@ function ScheduleCell({ slot, position, assignment, locked, editable, onAdd, onR
       <button type="button" className="roster-action" disabled={actionPending} onClick={onMove}>Mover</button>
       <button type="button" className="roster-action" disabled={typePending || actionPending} onClick={onToggleType}>Mudar tipo</button>
       <button type="button" className="roster-action roster-remove" disabled={actionPending} aria-label={`Retirar ${assignment.rank} ${assignment.operationalName} da ${position}ª coluna de ${dateLabel(slot.service_date)}, ${slot.period === 'DIURNO' ? 'dia' : 'noite'}`} onClick={onRemove}>Retirar</button>
+      <button type="button" className="roster-action roster-observation" disabled={actionPending || slot.status !== 'OPEN' || Boolean(slot.homologated_at)} onClick={onObservation} aria-label={`Observação de ${assignment.rank} ${assignment.operationalName}, ${position}ª coluna, ${periodLabel(slot.period)}, ${dateLabel(slot.service_date)}`}>Observação</button>
     </div>}
   </div>;
 }

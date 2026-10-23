@@ -49,6 +49,14 @@ Se o mês excluído estava ativo no WhatsApp, a fila é encerrada e outro mês g
 
 No celular, **Gerenciar escala** organiza as posições em cartões por data e turno, com botões maiores. **Retirar** abre uma confirmação com militar, dia, turno e posição; a retirada deixa apenas aquela posição vaga. A confirmação de retirada e a de exclusão do mês mantêm os botões visíveis, permitem rolar o conteúdo e mostram eventuais erros na própria janela.
 
+### Observações nos serviços
+
+Em **Gerenciar escala**, cada serviço ocupado possui o botão **Observação**, disponível para administradores e escalantes. Informe um texto livre, como `Sgt Jansen` para permuta, `ATESTADO`, `DISPENSADO` ou outra anotação. A prévia mostra o resultado: `Sgt Fragoso (Sgt Jansen)`. Os parênteses são automáticos; limite de 160 caracteres, em uma linha.
+
+A observação vale somente para o militar, dia e turno selecionados. Não troca o militar nem altera coluna, tipo de serviço, protocolo ou horas. Funciona em ordinários e extras. Use **Limpar texto** e salve para remover a anotação existente. As anotações registradas pelo WhatsApp também podem ser editadas nessa janela.
+
+O painel, a consulta de confirmados e os próximos PDFs usam a mesma anotação; o layout do PDF não muda. Horários fechados ou homologados bloqueiam a edição. Se a marcação tiver sido modificada após a abertura da janela, o servidor recusa a gravação e o painel recarrega a escala, evitando substituir uma alteração mais recente. A ação tem auditoria própria; o comando `/desfazer` do WhatsApp continua limitado às ações feitas pelo bot.
+
 ## Trocar ou remanejar um militar
 
 Na página **Efetivo**, a coluna **Ala** tem um seletor com as alas 1 a 5, semelhante ao de Situação. Escolher uma ala abre uma confirmação, sem salvar imediatamente. A janela permite conferir a posição, trocar com outro militar e programar a mudança a partir do próximo mês. Também há a opção de aplicá-la às datas restantes da escala selecionada. Nesse caso, a mudança atual e a futura são salvas juntas; se houver conflito, nenhuma delas será salva. A tabela indica a mudança programada abaixo do seletor.

@@ -93,7 +93,7 @@ router.get('/manage', (req, res, next) => {
     const competencyId = z.coerce.number().int().positive().parse(req.query.competency_id);
     const competency = db.prepare('SELECT id,name,year,month,status,generated_at FROM competencies WHERE id=? AND generated_at IS NOT NULL').get(competencyId);
     if (!competency) return res.status(404).json({ message: 'Mês da escala não encontrado.' });
-    const slots = db.prepare(`SELECT s.*,a.id AS assignment_id,a.position_number,a.member_id,a.service_type,a.display_prefix,m.rank,m.operational_name
+    const slots = db.prepare(`SELECT s.*,a.id AS assignment_id,a.position_number,a.member_id,a.service_type,a.display_prefix,a.updated_at AS assignment_updated_at,m.rank,m.operational_name
       FROM service_slots s
       LEFT JOIN assignments a ON a.service_slot_id=s.id AND a.status='CONFIRMED'
       LEFT JOIN members m ON m.id=a.member_id
@@ -102,12 +102,12 @@ router.get('/manage', (req, res, next) => {
     const items = new Map();
     for (const row of slots) {
       if (!items.has(row.id)) {
-        const { assignment_id, position_number, member_id, service_type, display_prefix, rank, operational_name, ...slot } = row;
+        const { assignment_id, position_number, member_id, service_type, display_prefix, assignment_updated_at, rank, operational_name, ...slot } = row;
         items.set(row.id, { ...slot, assignments: [] });
       }
       if (row.assignment_id) items.get(row.id).assignments.push({
         id: row.assignment_id, positionNumber: row.position_number, memberId: row.member_id,
-        rank: row.rank, operationalName: row.operational_name, serviceType: row.service_type, displayPrefix: row.display_prefix
+        rank: row.rank, operationalName: row.operational_name, serviceType: row.service_type, displayPrefix: row.display_prefix, updatedAt: row.assignment_updated_at
       });
     }
     res.json({ competency, items: [...items.values()] });
@@ -196,6 +196,33 @@ router.post('/assignments/:id/move', allow('ADMIN', 'SCHEDULER'), (req, res, nex
     const item = db.prepare('SELECT * FROM assignments WHERE id=?').get(assignmentId);
     audit({ userId: req.user.id, action: occupied ? 'MANUAL_ASSIGNMENT_SWAP' : 'MANUAL_ASSIGNMENT_MOVE', entityType: 'ASSIGNMENT', entityId: assignmentId, before: { assignment, occupied }, after: item, req });
     res.json({ item, swapped: Boolean(occupied) });
+  } catch (error) { next(error); }
+});
+
+router.patch('/assignments/:id/observation', allow('ADMIN', 'SCHEDULER'), (req, res, next) => {
+  try {
+    const id = z.coerce.number().int().positive().parse(req.params.id);
+    const input = z.object({
+      displayPrefix: z.string().trim().max(160).refine((value) => !/[()\x00-\x1f\x7f]/.test(value),
+        'Escreva o texto em uma linha, sem parênteses.').nullable(),
+      expectedUpdatedAt: z.string().min(1).max(64)
+    }).strict().parse(req.body);
+    const result = db.transaction(() => {
+      const before = db.prepare("SELECT * FROM assignments WHERE id=? AND status='CONFIRMED'").get(id);
+      if (!before) return { status: 404, message: 'Marcação não encontrada. Atualize a escala.' };
+      const slot = db.prepare('SELECT * FROM service_slots WHERE id=?').get(before.service_slot_id);
+      if (slot.status !== 'OPEN' || slot.homologated_at) return { status: 409, message: 'Não é possível editar a observação de um horário fechado ou homologado.' };
+      if (before.updated_at !== input.expectedUpdatedAt) return { status: 409, message: 'Esta marcação foi alterada por outra pessoa. Feche a janela e atualize a escala antes de editar.' };
+      const displayPrefix = input.displayPrefix || null;
+      if (before.display_prefix === displayPrefix) return { item: before };
+      const updatedAt = new Date(Math.max(Date.now(), (Date.parse(before.updated_at) || 0) + 1)).toISOString();
+      db.prepare('UPDATE assignments SET display_prefix=?,updated_at=? WHERE id=?').run(displayPrefix, updatedAt, id);
+      const item = db.prepare('SELECT * FROM assignments WHERE id=?').get(id);
+      audit({ userId: req.user.id, action: 'MANUAL_ASSIGNMENT_OBSERVATION', entityType: 'ASSIGNMENT', entityId: id, before, after: item, req });
+      return { item };
+    })();
+    if (result.status) return res.status(result.status).json({ message: result.message });
+    res.json({ item: result.item });
   } catch (error) { next(error); }
 });
 

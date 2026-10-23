@@ -1405,7 +1405,10 @@ async function executeCommand(member, rawBody, { explicitSlash = false, targetMe
     if (isPermutaNote && !decoratedRequest.displayPrefix) {
       return 'Para registrar permuta, escreva o outro militar entre parênteses: *@Escalante permuta @militar dia 28 (Sgt Pedro Neto)*. Para trocar os serviços, use *troque*.';
     }
-    const parsed = parseSelection(decoratedRequest.text.replace(/^\s*\S+/, ' '));
+    const selection = decoratedRequest.text.replace(/^\s*\S+/, ' ');
+    // "Permuta @militar dia 28 dia deste mês por (Sgt Jomar)": the
+    // optional connector belongs to the annotation, never to the day/shift.
+    const parsed = parseSelection(isPermutaNote ? selection.replace(/\bPOR\s*$/i, ' ') : selection);
     if (parsed.error) return parsed.error;
     if (!parsed.choices.length) return 'Informe o dia e, se desejar, o turno do serviço existente. Nenhuma alteração foi feita.';
     const label = isPermutaNote ? decoratedRequest.displayPrefix : isCertificateNote ? 'ATESTADO' : 'DISPENSADO';

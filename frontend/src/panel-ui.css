@@ -326,3 +326,25 @@ html[data-theme="dark"] .roster-column .roster-shift-night .roster-shift-heading
   .roster-column .roster-actions { grid-template-columns: minmax(0, 1fr); }
 }
 @media (min-width: 370px) and (max-width: 680px) { .roster-column .roster-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.roster-observation { grid-column: 1/-1; }
+.observation-backdrop { z-index: 60; }
+.observation-dialog { width: min(560px, 100%); background: var(--ui-surface); color: var(--ui-text); }
+.observation-dialog form { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; }
+.observation-dialog label { display: grid; min-width: 0; gap: 8px; font-size: 13px; }
+.observation-dialog input { width: 100%; min-width: 0; height: 46px; padding: 10px; font-size: 16px; border: 1px solid var(--ui-border); border-radius: 9px; background: var(--ui-soft); color: var(--ui-text); }
+.observation-context { padding: 12px; margin: 0 0 18px; border-radius: 9px; background: var(--ui-soft); color: var(--ui-muted); font-size: 12px; line-height: 1.7; }
+.observation-input-meta { display: flex; justify-content: space-between; gap: 14px; color: var(--ui-muted); font-size: 11px; line-height: 1.6; }
+.observation-input-meta>small:last-child { flex-shrink: 0; }
+.observation-preview { display: grid; gap: 7px; padding: 14px; border: 1px solid var(--ui-border); border-radius: 9px; background: var(--ui-selection); overflow-wrap: anywhere; }
+.observation-preview>span { color: var(--ui-muted); font-size: 11px; }
+.observation-preview>strong { color: var(--ui-text); font-size: 14px; line-height: 1.7; }
+.observation-dialog .observation-help { margin: 0; color: var(--ui-muted); font-size: 12px; line-height: 1.75; }
+.observation-dialog button.observation-clear { justify-self: start; min-height: 40px; padding: 8px 12px; }
+.observation-dialog .form-actions { justify-content: flex-end; margin-top: 4px; }
+.observation-dialog .form-actions>button { height: auto; min-height: 44px; padding: 10px 14px; white-space: normal; }
+@media (max-width: 600px) {
+  .observation-dialog { padding: 18px 16px; max-height: calc(100dvh - 24px); }
+  .observation-dialog .modal-header { margin-bottom: 14px; }
+  .observation-dialog .form-actions { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .observation-dialog .form-actions>button { width: 100%; min-height: 46px; }
+}
