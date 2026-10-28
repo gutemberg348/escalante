@@ -15,7 +15,7 @@ import { regenerateOrdinaryAssignments, previewMonthGeneration } from '../schedu
 export { parseNaturalChoices } from './marking-choices.js';
 
 const authDirectory = path.resolve(path.dirname(env.DATABASE_PATH), 'whatsapp-auth');
-const commandHandlerVersion = 'mentions-v14-month-generation-confirmation';
+const commandHandlerVersion = 'mentions-v15-natural-removal-month-feedback';
 const commandMonthContext = new AsyncLocalStorage();
 const connection = {
   socket: null, saveCreds: null, status: 'DISCONNECTED', qrDataUrl: null, qrIssued: false,
@@ -417,17 +417,50 @@ async function mentionedMember(socket, message) {
   const named = memberMentionedByName(body);
   const required = textMentions.length >= 2 || Boolean(named)
     || (withoutBotMention(body).startsWith('/') && textMentions.length > 0);
+  if (!required) {
+    const written = writtenServiceTarget(normalizeMentionLabel(withoutBotMention(body)).replace(/^\/+\s*/, ''), null, null);
+    if (written.member || written.error) return { required: true, source: 'WRITTEN_NAME', targets: [], member: written.member ?? null, error: written.error ?? null };
+  }
   return { required, source: required ? 'TEXT_NAME' : 'SELF', targets: [], member: named,
     error: required && !named ? 'Não identifiquei um único militar marcado. Selecione o contato usando @. Nenhuma marcação foi feita.' : null };
 }
 
-const delegatedMarkingPattern = /\b(?:COLOCA|COLOCAR|COLOQUE|POE|POR|PONHA|BOTA|BOTAR|BOTE|MARCA|MARCAR|MARQUE|ESCALA|ESCALAR|INCLUA|ADICIONA|ADICIONAR|CRIA|CRIAR|CRIE)\b/;
+const delegatedMarkingPattern = /\b(?:COLOCA|COLOCAR|COLOQUE|POE|POR|PONHA|BOTA|BOTAR|BOTE|MARCA|MARCAR|MARQUE|LANCA|LANCAR|LANCE|ESCALA|ESCALAR|INCLUA|ADICIONA|ADICIONAR|CRIA|CRIAR|CRIE)\b/;
 const isDelegatedMarkingText = (body) => delegatedMarkingPattern.test(normalizeMentionLabel(body));
 const delegatedRemovalActions = [
   'RETIRA', 'RETIRAR', 'RETIRE', 'TIRA', 'TIRAR', 'TIRE',
   'EXCLUI', 'EXCLUIR', 'EXCLUA', 'REMOVE', 'REMOVER', 'REMOVA',
-  'APAGA', 'APAGAR', 'APAGUE'
+  'APAGA', 'APAGAR', 'APAGUE', 'DESMARCA', 'DESMARCAR', 'DESMARQUE',
+  'CANCELA', 'CANCELAR', 'CANCELE'
 ];
+
+const replacementTailPattern = /[,;]?\s+(?:E\s+)?(?:LANCAR|LANCA|LANCE|COLOCAR|COLOQUE|MARCAR|MARQUE|ESCALAR)\s+(?:(?:SO|SOMENTE|APENAS)\s+)?(.+)$/i;
+const isCompoundReplacement = (text) => isDelegatedRemovalText(text) && replacementTailPattern.test(normalizeMentionLabel(text));
+
+function memberByWrittenName(value) {
+  const label = normalizeMentionLabel(value).replace(/^(?:O|A)\s+/, '').replace(/[.,;:]\s*$/, '').trim();
+  const matches = db.prepare('SELECT * FROM members').all().filter((item) =>
+    [item.operational_name, item.full_name, `${item.rank} ${item.operational_name}`]
+      .filter(Boolean).some((name) => normalizeMentionLabel(name) === label));
+  return matches.length === 1 ? matches[0] : null;
+}
+
+// Resolve only the explicit name between a service verb and the date. Never
+// guess a contact from a partial name, a parenthetical note or a reminder.
+function writtenServiceTarget(text, explicitTarget, sender) {
+  if (explicitTarget) return { member: explicitTarget };
+  text = text.replace(/["'“”‘’*]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (/^ESCALA\b/.test(text) || parseMarkingScheduleCommand(text)) return { member: sender };
+  const action = delegatedRemovalAction(text) ?? text.match(delegatedMarkingPattern);
+  if (!action || action.index !== 0) return { member: sender };
+  const rest = text.slice(action[0].length).trim();
+  const dateStart = rest.search(/\b(?:DIAS?\s+(?=\d)|HOJE|HOJ|HJ|AMANHA|\d)/);
+  if (dateStart < 0) return { member: sender };
+  const name = rest.slice(0, dateStart).replace(/\b(?:DO|NO|DE|PARA)\s*$/, '').trim();
+  if (!name || /^(?:EU|MIM|PARA MIM|ME|MEU|MINHA|O|A)$/.test(name)) return { member: sender };
+  const member = memberByWrittenName(name);
+  return member ? { member } : { error: 'Não identifiquei um único militar com esse nome. Use o nome cadastrado completo ou marque o contato com @. Nenhuma alteração foi feita.' };
+}
 
 function differsByAtMostOneCharacter(left, right) {
   if (Math.abs(left.length - right.length) > 1) return false;
@@ -849,6 +882,7 @@ export async function handleIncomingMessages(socket, { messages }) {
       ? await senderIsGroupAdministrator(socket, message)
       : false;
     const multiTargetRequest = directTarget.targets?.length > 1 && isDelegatedMarkingText(directText);
+    const compoundReplacement = isCompoundReplacement(directText);
     const quotedCandidate = quotedMemberRequest(socket, message);
     const hasDirectMarkingRequest = directChoices.length > 0 || Boolean(directSelection.error)
       || isDelegatedMarkingText(directText) || isDelegatedRemovalText(directText) || isAssignmentChangeText(directText)
@@ -893,11 +927,15 @@ export async function handleIncomingMessages(socket, { messages }) {
     const panelAdministrator = isConfiguredAdministrator(actorIdentity.member);
     const reply = await recordWhatsAppCommand({ groupJid: remoteJid, actorMemberId: actorIdentity.member?.id,
       messageId: processedMessageId, commandText,
-      permission: groupAdministrator ? 'GROUP_ADMIN' : panelAdministrator ? 'PANEL_ADMIN' : 'SELF' }, async () => identity.member
+      permission: groupAdministrator ? 'GROUP_ADMIN' : panelAdministrator ? 'PANEL_ADMIN' : 'SELF',
+      reportChangedMonths: true, fallbackCompetencyId: activeCompetency()?.id }, async () => identity.member
       ? isAssignmentChangeText(directText)
         ? await changeExtraAssignment(socket, message, body, directText,
           directTarget.targets?.length ? directTarget.targets : targetMember ? [{ member: targetMember }] : [], identity.member)
-      : multiTargetRequest
+      : compoundReplacement && directTarget.targets?.length === 2
+        ? await executeCommand(identity.member, commandText, { explicitSlash, targetMember: directTarget.targets[0].member,
+          replacementMember: directTarget.targets[1].member, requiresTarget: true, groupAdministrator, panelAdministrator, actorMemberId: actorIdentity.member?.id, groupJid: remoteJid })
+      : multiTargetRequest && !compoundReplacement
         ? await assignMultipleMentionedMembers(socket, message, body, directTarget.targets)
         : quotedTargetMissing
         ? 'O autor da mensagem citada não está cadastrado no efetivo. Nenhuma marcação foi feita.'
@@ -1065,7 +1103,10 @@ O bot responde de cinco formas:
 Para retirar somente serviços extras:
    *@Escalante retirar @militar do dia 19, dia*
    *@Escalante excluir @militar do dia 19, 24h*
-Aceita retirar, tirar, excluir, remover ou apagar e tolera erro de uma letra nesses verbos.
+Aceita desmarcar, cancelar, retirar, tirar, excluir, remover ou apagar e tolera erro de uma letra nesses verbos.
+Exemplo para si: desmarcar 12 horas noite do dia de amanhã.
+Também aceita lançar com nome escrito: lançar o Sgt Duarte dia 12, 24h.
+Cancelar pelo código continua funcionando: /cancelar 125.
 Quando informar apenas o dia, todos os extras desse militar no dia serão retirados.
 
 Para ajustar somente serviços extras:
@@ -1074,6 +1115,10 @@ Para ajustar somente serviços extras:
    *Trocar comigo:* @Escalante troque @militar dia 17 noite comigo dia 20 dia
    *Remanejar:* @Escalante remaneje @militar1 do dia 17 noite para dia 20 dia
 Cada lado da troca deve informar somente um turno. O bot mostra o antes e o depois.
+Também aceita: retirar Pedro Neto do dia 28, lançar só o Sgt Jansen.
+Nessa frase, sem turno, troca os extras existentes de dia e noite nas mesmas colunas.
+Nomes escritos devem corresponder a um único militar cadastrado. Se houver dúvida, use @.
+Toda alteração confirma o mês por escrito. Outro mês informado vale só para aquele pedido.
 
 Para registrar uma observação em um serviço existente:
    *@Escalante permuta @militar dia 28 (Sgt Pedro Neto)*
@@ -1337,11 +1382,13 @@ async function saveAndStartMarkingSchedulePlan(plan, requestedBy) {
   return `*CRONOGRAMA INICIADO*\n${competency.name} — ${plan.column}ª coluna.`;
 }
 
-async function executeCommand(member, rawBody, { explicitSlash = false, targetMember = null, requiresTarget = false, groupAdministrator = false, panelAdministrator = false, actorMemberId = null, groupJid = null } = {}) {
+async function executeCommand(member, rawBody, { explicitSlash = false, targetMember = null, replacementMember = null, requiresTarget = false, groupAdministrator = false, panelAdministrator = false, actorMemberId = null, groupJid = null } = {}) {
   if (isUndoCommand(rawBody)) {
     const undone = undoLastWhatsAppCommand({ groupJid, actorMemberId, panelAdministrator, groupAdministrator });
     const competency = undone.competencyIds?.length === 1
       ? db.prepare('SELECT * FROM competencies WHERE id=? AND generated_at IS NOT NULL').get(undone.competencyIds[0]) : null;
+    const months = undone.competencyNames ?? (undone.competencyIds ?? []).map((id) => db.prepare('SELECT name FROM competencies WHERE id=?').get(id)?.name).filter(Boolean);
+    if (months.length) undone.text += `\n\n*Mês alterado: ${months.join('; ')}*`;
     if (competency) {
       try {
         const pdf = await commandMonthContext.run({ competency }, () => schedulePdfMessage());
@@ -1368,6 +1415,8 @@ async function executeCommand(member, rawBody, { explicitSlash = false, targetMe
   }
   const pdfMonthQuery = normalized.match(/^(?:ESCALA|MES)\s+(.+)$/);
   if (pdfMonthQuery && !targetMember) return queryCompetencyFromGroup(pdfMonthQuery[1]);
+  const cancellationCode = normalized.match(/^CANCEL(?:AR|A|E)?\s+#?(\d+)\s*[.!]?$/);
+  if (cancellationCode) return cancelMemberAssignment(member, cancellationCode[1]);
   const parseSelection = parseActiveMarkingRequest;
   const columnRequest = parseColumnCommand(commandBody);
   if (columnRequest) {
@@ -1389,12 +1438,24 @@ async function executeCommand(member, rawBody, { explicitSlash = false, targetMe
     return changeMemberOperationalStatus(targetMember, memberStatusRequest.status, member, groupJid);
   }
   if (!commandMonthContext.getStore() && !parseMarkingScheduleCommand(commandBody)
-    && !/^(?:GERAR|CONFIRMAR|CANCELAR|STATUS|PASSO|PASSAR)\b|^CRIAR\s+(?:(?:A|O)\s+)?(?:LISTA|ESCALA)\b/.test(normalized)) {
+    && !/^(?:GERAR|CONFIRMAR|STATUS|PASSO|PASSAR)\b|^CANCELAR\s+#?\d+\b|^CRIAR\s+(?:(?:A|O)\s+)?(?:LISTA|ESCALA)\b/.test(normalized)) {
     const request = resolveRequestedMonth(commandBody);
     if (request.error) return request.error;
     if (request.requested) return commandMonthContext.run(request, () => executeCommand(member, request.text, {
-      explicitSlash, targetMember, requiresTarget, groupAdministrator, panelAdministrator, actorMemberId, groupJid
+      explicitSlash, targetMember, replacementMember, requiresTarget, groupAdministrator, panelAdministrator, actorMemberId, groupJid
     }));
+  }
+  if (isCompoundReplacement(normalized)) {
+    const tail = normalized.match(replacementTailPattern);
+    const sourceText = normalized.slice(0, tail.index).replace(/[,;]\s*$/, '').trim();
+    const source = writtenServiceTarget(sourceText, targetMember, member);
+    if (source.error) return source.error;
+    const destination = replacementMember ?? memberByWrittenName(tail[1]);
+    if (!destination) return 'Não identifiquei um único militar para assumir o serviço. Marque os dois contatos ou use os nomes cadastrados completos. Nenhuma alteração foi feita.';
+    const parsed = parseSelection(removeDelegatedRemovalAction(sourceText));
+    if (parsed.error) return parsed.error;
+    if (!parsed.choices.length) return 'Informe o dia da troca. Nenhuma alteração foi feita.';
+    return replaceExtraChoices(member, source.member, destination, parsed.choices);
   }
   const isPermutaNote = ['PERMUTA', 'PERMUTAR', 'PERMUTE'].includes(command);
   const isCertificateNote = command === 'ATESTADO';
@@ -1443,13 +1504,20 @@ async function executeCommand(member, rawBody, { explicitSlash = false, targetMe
   }
   const delegatedRemoval = isDelegatedRemovalText(normalized);
   if (delegatedRemoval) {
+    const target = writtenServiceTarget(normalized, targetMember, member);
+    if (target.error) return target.error;
     const selection = removeDelegatedRemovalAction(normalized);
     const parsed = parseSelection(selection);
     if (parsed.error) return parsed.error;
     if (!parsed.choices.length) return `Informe o dia e, se desejar, o turno que será retirado de *${(targetMember ?? member).rank} ${(targetMember ?? member).operational_name}*. Exemplo: *retirar @militar do dia 19, noite*.`;
-    return removeExtraNaturalChoices(targetMember ?? member, parsed.choices, member);
+    return removeExtraNaturalChoices(target.member, parsed.choices, member);
   }
   const delegatedAction = isDelegatedMarkingText(normalized);
+  if (delegatedAction && !targetMember) {
+    const target = writtenServiceTarget(normalized, null, member);
+    if (target.error) return target.error;
+    if (target.member.id !== member.id) targetMember = target.member;
+  }
   const delegatedSelection = parseSelection(normalized);
   if (targetMember && (delegatedAction || (requiresTarget && (delegatedSelection.choices.length > 0 || delegatedSelection.error)))) {
     if (delegatedSelection.error) return delegatedSelection.error;
@@ -1925,6 +1993,10 @@ Militar: ${targetMember.rank} ${targetMember.operational_name}${!ordinaryOnly &&
 ${ordinaryOnly ? 'Nenhuma escala ordinária encontrada' : 'Nenhum serviço encontrado'} nessa data e turno.`;
 }
 
+function writtenServiceDate(value) {
+  return new Date(`${value.slice(0, 10)}T12:00:00`).toLocaleDateString('pt-BR', { day: 'numeric', month: 'long', year: 'numeric' });
+}
+
 function parseSingleChangeChoice(value, { optional = false } = {}) {
   const decorated = extractDisplayPrefix(String(value ?? '').replace(/\b(?:POR|PARA|COM)\s*$/i, ' '));
   if (decorated.error) return { error: decorated.error };
@@ -2001,6 +2073,38 @@ Antes: ${changeDescription(sourceMember, source.slot)}
 Agora: ${changeDescription(targetMember, source.slot)}
 
 Somente o serviço extra informado foi alterado.`;
+}
+
+// "Retirar Pedro Neto do dia 28, lançar só o Sgt Jansen" is one atomic
+// replacement. Keep the original cells/types and never delete then rebook.
+function replaceExtraChoices(requestedBy, sourceMember, targetMember, choices) {
+  if (sourceMember.id === targetMember.id) return 'Informe dois militares diferentes. Nenhuma alteração foi feita.';
+  const competency = activeCompetency();
+  if (!competency) return 'Não há mês selecionado para realizar a troca.';
+  const plan = [];
+  for (const choice of choices) for (const period of choice.periods) {
+    const slot = changeSlot({ day: choice.day, periods: [period] });
+    const assignment = extraAssignment(sourceMember, slot);
+    if (!assignment) continue;
+    if (slot.status !== 'OPEN' || slot.homologated_at) return 'O serviço está fechado ou homologado. Nenhuma alteração foi feita.';
+    const error = destinationError(targetMember, slot, assignment.id);
+    if (error) return `${error} Nenhuma alteração foi feita.`;
+    plan.push({ slot, assignment });
+  }
+  if (!plan.length) return 'Nenhum serviço extra encontrado para o militar de origem. Serviços ordinários são preservados. Nenhuma alteração foi feita.';
+  const limit = memberHourLimit(targetMember, competency);
+  const hours = db.prepare(`SELECT COUNT(*)*12 hours FROM assignments a JOIN service_slots s ON s.id=a.service_slot_id
+    WHERE s.competency_id=? AND a.member_id=? AND a.status='CONFIRMED' AND a.service_type='EXTRAORDINARY'`).get(competency.id, targetMember.id).hours;
+  if (limit !== null && hours + plan.length * 12 > limit) return 'O militar de destino ultrapassaria o limite de horas extras. Nenhuma alteração foi feita.';
+  db.transaction(() => {
+    for (const { assignment } of plan) {
+      db.prepare('UPDATE assignments SET member_id=?,display_prefix=NULL,updated_at=? WHERE id=?').run(targetMember.id, now(), assignment.id);
+      audit({ action: 'BOT_EXTRA_REPLACE', entityType: 'ASSIGNMENT', entityId: assignment.id,
+        before: assignment, after: db.prepare('SELECT * FROM assignments WHERE id=?').get(assignment.id),
+        reason: `Troca solicitada por ${requestedBy.rank} ${requestedBy.operational_name}` });
+    }
+  })();
+  return `*TROCA REALIZADA*\n*Mês: ${competency.name}*\nAntes: ${sourceMember.rank} ${sourceMember.operational_name}\nAgora: ${targetMember.rank} ${targetMember.operational_name}\n${plan.map(({ slot, assignment }) => `${writtenServiceDate(slot.service_date)} — ${periodLabel(slot.period)} — ${assignment.position_number}ª coluna`).join('\n')}\n\nSomente os serviços extras foram trocados. Colunas e tipos foram mantidos.`;
 }
 
 function moveExtraAssignment(requestedBy, member, sourceChoice, targetChoice) {

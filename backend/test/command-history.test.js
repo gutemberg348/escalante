@@ -59,6 +59,18 @@ test('a multi-row command restores deleted and updated records together', async 
   assert.ok(undo().commandId);
   assert.deepEqual(db.prepare('SELECT * FROM assignments ORDER BY id').all(), before);
 });
+
+test('month feedback uses the changed assignments rather than a different fallback month and preserves TEXT metadata', async () => {
+  const payload = { type: 'TEXT', text: 'Serviço retirado.', mentions: ['test@s.whatsapp.net'], pdf: { fileName: 'test.pdf' } };
+  const id = add();
+  const result = await record(() => { db.prepare('DELETE FROM assignments WHERE id=?').run(id); return payload; },
+    { reportChangedMonths: true, fallbackCompetencyId: 999999 });
+  assert.equal(result.text, `${payload.text}\n\n*Mês alterado: ${competency.name}*`);
+  assert.deepEqual(result.mentions, payload.mentions);
+  assert.deepEqual(result.pdf, payload.pdf);
+  assert.equal(await record(() => 'Nada foi alterado.', { reportChangedMonths: true, fallbackCompetencyId: competency.id }), 'Nada foi alterado.');
+  assert.deepEqual(undo().competencyNames, [competency.name]);
+});
 test('swaps restore unique positions by reversing their intermediate steps', async () => {
   const a = add(), b = add(slots[0], 2, 2);
   await record(() => db.transaction(() => {

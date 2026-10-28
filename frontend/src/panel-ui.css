@@ -327,6 +327,15 @@ html[data-theme="dark"] .roster-column .roster-shift-night .roster-shift-heading
 }
 @media (min-width: 370px) and (max-width: 680px) { .roster-column .roster-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .roster-observation { grid-column: 1/-1; }
+.schedule-change-notice { display: grid; gap: 7px; margin: 14px 0; padding: 14px; border: 1px solid #e4c984; border-left: 4px solid #c79520; border-radius: 9px; background: #fff8e8; color: #64460c; }
+.schedule-change-notice>span { font-size: 10px; font-weight: 800; letter-spacing: .6px; }
+.schedule-change-notice>strong { font-size: 15px; line-height: 1.5; }
+.schedule-change-notice>p { margin: 0; font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
+.service-type-warning { padding: 13px; border: 1px solid #e7b4bd; border-radius: 9px; background: #fff0f2; color: #9e2d40; font-size: 12px; line-height: 1.7; }
+html[data-theme="dark"] .schedule-change-notice { background: #372e1e; border-color: #8b7138; color: #f2d998; }
+html[data-theme="dark"] :is(.page-content, .edit-modal) .schedule-change-notice :is(strong,p) { color: #f2d998; }
+html[data-theme="dark"] :is(.page-content, .edit-modal) .service-type-warning { background: #422735; border-color: #8f5363; color: #ffbecc; }
+html[data-theme="dark"] .edit-modal .service-type-warning strong { color: #ffbecc; }
 .observation-backdrop { z-index: 60; }
 .observation-dialog { width: min(560px, 100%); background: var(--ui-surface); color: var(--ui-text); }
 .observation-dialog form { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; }

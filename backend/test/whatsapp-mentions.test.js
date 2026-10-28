@@ -53,6 +53,7 @@ beforeEach(() => {
     DELETE FROM schedule_pdf_column_releases;
     UPDATE service_slots SET current_capacity=2;`);
   db.prepare("UPDATE members SET active=1,operational_status='ACTIVE',authorization_status='AUTHORIZED',ordinary_eligible=1").run();
+  db.prepare("UPDATE members SET operational_name=CASE id WHEN 1 THEN 'Remetente' WHEN 18 THEN 'Alex' ELSE 'Outro' END,monthly_hour_limit=NULL,hour_limit_exempt=0").run();
   db.exec(`UPDATE members SET seniority_position=NULL;
     UPDATE members SET seniority_position=1 WHERE id=1;
     UPDATE members SET seniority_position=2 WHERE id=18;
@@ -328,7 +329,7 @@ test('/justificar updates the existing ordinary shifts without creating assignme
     { display_prefix: 'afastado', service_type: 'ORDINARY', period: 'DIURNO' },
     { display_prefix: 'afastado', service_type: 'ORDINARY', period: 'NOTURNO' }
   ]);
-  assert.equal(replies[0].text, `*JUSTIFICATIVA REGISTRADA*\nData: 20/09/${futureYear}\nMilitar: Sgt Alex`);
+  assert.equal(replies[0].text, `*JUSTIFICATIVA REGISTRADA*\nData: 20/09/${futureYear}\nMilitar: Sgt Alex\n\n*Mês alterado: ${competency.name}*`);
 });
 
 test('bot and military mentions with date, shift and parentheses justify an existing ordinary assignment', async () => {
@@ -339,7 +340,7 @@ test('bot and military mentions with date, shift and parentheses justify an exis
   assert.deepEqual(db.prepare('SELECT member_id,service_type,display_prefix FROM assignments').all(), [
     { member_id: 18, service_type: 'ORDINARY', display_prefix: 'LICENÇA' }
   ]);
-  assert.equal(replies[0].text, `*JUSTIFICATIVA REGISTRADA*\nData: 20/09/${futureYear}\nMilitar: Sgt Alex`);
+  assert.equal(replies[0].text, `*JUSTIFICATIVA REGISTRADA*\nData: 20/09/${futureYear}\nMilitar: Sgt Alex\n\n*Mês alterado: ${competency.name}*`);
 });
 
 test('/marcar with a justification redirects to /justificar without creating a service', async () => {
@@ -387,7 +388,7 @@ for (const [command, label, heading] of [
     const daySlot = db.prepare(`SELECT id FROM service_slots WHERE competency_id=? AND service_date=? AND period='DIURNO'`)
       .get(competency.id, `${futureYear}-09-28`);
     assert.equal(assignmentCellsBySlot(competency.id).get(daySlot.id).names[1], `Sgt Alex (${label})`);
-    assert.equal(replies.at(-1).text, `*${heading}*\nData: 28/09/${futureYear}\nMilitar: Sgt Alex (${label})`);
+    assert.equal(replies.at(-1).text, `*${heading}*\nData: 28/09/${futureYear}\nMilitar: Sgt Alex (${label})\n\n*Mês alterado: ${competency.name}*`);
   });
 
   test(`${command} does not create an assignment when no service exists`, async () => {
@@ -1271,6 +1272,112 @@ function bookedDates() {
   return db.prepare(`SELECT a.member_id,s.service_date,s.period FROM assignments a
     JOIN service_slots s ON s.id=a.service_slot_id ORDER BY s.service_date,s.period,a.member_id`).all();
 }
+
+for (const selection of ['dia 12 *24h', '"dia 22" 24h']) test(`lancar a written registered name accepts ${selection} without booking the sender`, async () => {
+  db.prepare("UPDATE members SET operational_name='Duarte' WHERE id=18").run();
+  await receive(`@Escalante lançar o Sgt Duarte ${selection}`, [bot]);
+  assert.deepEqual(assignedIds(), [18, 18]);
+  assert.match(replies[0].text, /DUARTE/);
+  assert.ok(replies[0].text.includes(competency.name));
+});
+
+test('a written target takes priority over the quoted author', async () => {
+  await receive('@Escalante lançar o Sgt Alex dia 20 noite', [bot], { participant: other, quotedMessage: { conversation: 'teste' } });
+  assert.deepEqual(assignedIds(), [18]);
+});
+
+test('unknown or ambiguous written names never fall back to the sender', async () => {
+  await receive('@Escalante lançar o Sgt Desconhecido dia 20 24h', [bot]);
+  assert.deepEqual(assignedIds(), []);
+  assert.match(replies.at(-1).text, /Não identifiquei/);
+  db.prepare("UPDATE members SET operational_name='Alex' WHERE id=19").run();
+  await receive('@Escalante lançar Alex dia 20 noite', [bot]);
+  assert.deepEqual(assignedIds(), []);
+  assert.match(replies.at(-1).text, /Não identifiquei/);
+});
+
+for (const verb of ['desmarcar', 'desmarca', 'desmarque', 'cancelar', 'cancela', 'cancele']) test(`${verb} removes only the extra and leaves the other member, ordinary and column intact`, async () => {
+  addConfirmedAssignment({ memberId: 1, period: 'DIURNO', serviceType: 'ORDINARY' });
+  addConfirmedAssignment({ memberId: 1, period: 'NOTURNO', serviceType: 'EXTRAORDINARY' });
+  addConfirmedAssignment({ memberId: 18, period: 'NOTURNO', serviceType: 'EXTRAORDINARY' });
+  const remaining = db.prepare('SELECT * FROM assignments WHERE service_type=\'ORDINARY\' OR member_id=18 ORDER BY id').all();
+  await receive(`@Escalante ${verb} dia 20 24h`, [bot]);
+  assert.deepEqual(db.prepare('SELECT * FROM assignments ORDER BY id').all(), remaining);
+  assert.ok(replies.at(-1).text.includes(competency.name));
+});
+
+test('desmarcar 12 horas noite do dia de amanha works when replying to the bot', async () => {
+  const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1);
+  const current = generatedMonth(tomorrow.getFullYear(), tomorrow.getMonth() + 1);
+  setting.run('bot_active_competency_id', String(current.id), stamp);
+  await receive(`@Escalante lançar dia ${tomorrow.getDate()} 24h`, [bot]);
+  assert.deepEqual(assignedIds(), [1, 1]);
+  await receive('Desmarcar 12 horas noite do dia de amanhã', [], { participant: bot, quotedMessage: { conversation: 'Use 20 noite' } });
+  assert.deepEqual(db.prepare(`SELECT a.member_id,s.period FROM assignments a JOIN service_slots s ON s.id=a.service_slot_id`).all(), [{ member_id: 1, period: 'DIURNO' }]);
+  assert.ok(replies.at(-1).text.includes(current.name));
+});
+
+for (const explicit of [false, true]) test(`remove then launch is one atomic replacement with ${explicit ? 'mentions' : 'written names'}`, async () => {
+  db.prepare("UPDATE members SET operational_name='Pedro Neto' WHERE id=18").run();
+  db.prepare("UPDATE members SET operational_name='Jansen' WHERE id=19").run();
+  for (const period of ['DIURNO', 'NOTURNO']) addConfirmedAssignment({ memberId: 18, day: 28, period, serviceType: 'EXTRAORDINARY' });
+  const before = db.prepare('SELECT * FROM assignments ORDER BY id').all();
+  await receive(explicit ? '@Escalante retirar @Pedro Neto do dia 28, lançar só o @Sgt Jansen' : '@Escalante retirar pedro neto do dia 28, lançar só o SGT jansen', explicit ? [bot, alex, other] : [bot]);
+  const after = db.prepare('SELECT * FROM assignments ORDER BY id').all();
+  assert.deepEqual(after.map(({ member_id, display_prefix, updated_at, ...rest }) => rest), before.map(({ member_id, display_prefix, updated_at, ...rest }) => rest));
+  assert.deepEqual(after.map(row => row.member_id), [19, 19]);
+  assert.match(replies.at(-1).text, /TROCA REALIZADA/);
+  assert.ok(replies.at(-1).text.includes(competency.name));
+  await receive('/desfazer', []);
+  assert.deepEqual(db.prepare('SELECT * FROM assignments ORDER BY id').all(), before);
+  assert.ok(replies.findLast(item => item.text).text.includes(competency.name));
+});
+
+test('compound replacement refuses every change if a destination shift is occupied or hours exceed limit', async () => {
+  for (const period of ['DIURNO', 'NOTURNO']) addConfirmedAssignment({ memberId: 18, day: 28, period, serviceType: 'EXTRAORDINARY' });
+  addConfirmedAssignment({ memberId: 19, day: 28, period: 'NOTURNO', serviceType: 'EXTRAORDINARY' });
+  const before = db.prepare('SELECT * FROM assignments ORDER BY id').all();
+  await receive('@Escalante retirar Alex dia 28, lançar só o Sgt Outro', [bot]);
+  assert.deepEqual(db.prepare('SELECT * FROM assignments ORDER BY id').all(), before);
+  db.prepare('DELETE FROM assignments WHERE member_id=19').run();
+  db.prepare('UPDATE members SET monthly_hour_limit=12 WHERE id=19').run();
+  const beforeLimit = db.prepare('SELECT * FROM assignments ORDER BY id').all();
+  await receive('@Escalante retirar Alex dia 28, lançar só o Sgt Outro', [bot]);
+  assert.deepEqual(db.prepare('SELECT * FROM assignments ORDER BY id').all(), beforeLimit);
+  assert.match(replies.at(-1).text, /limite de horas/);
+});
+
+test('cancelar with explicit month removes only extras in that month and preserves the selection', async () => {
+  const target = generatedMonth(futureYear, 11);
+  const slots = db.prepare("SELECT id FROM service_slots WHERE competency_id=? AND service_date=?").all(target.id, `${futureYear}-11-28`);
+  for (const slot of slots) db.prepare(`INSERT INTO assignments (service_slot_id,position_number,member_id,service_type,status,display_prefix,protocol,confirmed_at,created_at,updated_at)
+    VALUES (?,2,18,'EXTRAORDINARY','CONFIRMED','sgt jansen',?,?,?,?)`).run(slot.id, `CANCEL-NOTE-${++assignmentSequence}`, stamp, stamp, stamp);
+  addConfirmedAssignment({ memberId: 18, day: 28, serviceType: 'EXTRAORDINARY' });
+  const before = db.prepare('SELECT * FROM assignments WHERE service_slot_id NOT IN (?,?) ORDER BY id').all(...slots.map(slot => slot.id));
+  await receive(`@Escalante cancelar @Alex dia 28 mês 11/${futureYear}`, [bot, alex]);
+  assert.deepEqual(db.prepare('SELECT * FROM assignments ORDER BY id').all(), before);
+  assert.match(replies.at(-1).text, /serviço extra retirado/);
+  assert.ok(replies.at(-1).text.includes(target.name));
+  assert.equal(activeCompetency().id, competency.id);
+});
+
+test('cancelar with a parenthetical permuta does not remove annotations or assignments', async () => {
+  addConfirmedAssignment({ memberId: 18, displayPrefix: 'Sgt Outro', period: 'DIURNO' });
+  addConfirmedAssignment({ memberId: 18, displayPrefix: 'ATESTADO', period: 'NOTURNO' });
+  const before = db.prepare('SELECT * FROM assignments ORDER BY id').all();
+  await receive('@Escalante cancelar permuta (Sgt Outro) do dia 20 com @Alex', [bot, alex]);
+  assert.deepEqual(db.prepare('SELECT * FROM assignments ORDER BY id').all(), before);
+  assert.match(replies.at(-1).text, /Nada foi criado/);
+});
+
+test('cancelar with a numeric code still cancels that slot rather than parsing a calendar day', async () => {
+  addConfirmedAssignment({ memberId: 1, serviceType: 'EXTRAORDINARY' });
+  const slotId = db.prepare('SELECT service_slot_id FROM assignments').get().service_slot_id;
+  await receive(`/cancelar ${slotId}`, []);
+  assert.deepEqual(assignedIds(), []);
+  assert.match(replies.at(-1).text, /Marcação cancelada/);
+  assert.ok(replies.at(-1).text.includes(competency.name));
+});
 
 test('named month booking uses that month without changing the default or adding day 11', async () => {
   generatedMonth(futureYear, 11);

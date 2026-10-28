@@ -14,7 +14,7 @@ const forms = [
     '20 pela noite, por favor!', 'noite no dia 20', '20 das 19h às 07h', '20 19:00-07:00', '20 noite 12 horas', '20 noite?']
     .map(text => [text, [choice(20, night)]]),
   ...['20', 'dia 20', '20 24h', '20,24hrs', '20 24hras', '20 24 horas', '20 dia e noite', '20 noite e dia',
-    '20 dia/noite', '20 dia noite', '20 ambos os turnos', '20 dia inteiro', '20 integral', '24h dia 20', '20 vinte e quatro horas']
+    '20 dia/noite', '20 dia noite', '20 ambos os turnos', '20 dia inteiro', '20 integral', '24h dia 20', '20 vinte e quatro horas', 'dia 20 *24h', '"dia 20" 24h']
     .map(text => [text, [choice(20, full)]]),
   ['20,21 noite', [choice(20, night), choice(21, night)]],
   ['20 e 21 dia', [choice(20, day), choice(21, day)]],
@@ -55,6 +55,8 @@ for (const [input, expected] of [
   ['hoj dia', [choice(14, day)]],
   ['hj noite', [choice(14, night)]],
   ['amanhã dia', [choice(15, day)]],
+  ['12 horas noite do dia de amanhã', [choice(15, night)]],
+  ['12 hrs dia do dia de amanhã', [choice(15, day)]],
   ['por gentileza coloque 12h dia hoje?', [choice(14, day)]]
 ]) test(`relative date: ${input}`, () => {
   assert.deepEqual(parseMarkingRequest(input, { month: 9, year: 2026, today: '2026-09-14' }), { choices: expected, error: null });

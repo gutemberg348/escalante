@@ -3,8 +3,9 @@ import { createPortal } from 'react-dom';
 import { Link } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client.js';
+import { writtenDate } from '../utils/schedule-context.js';
 
-const dateLabel = (date) => date?.slice(0, 10).split('-').reverse().join('/');
+const dateLabel = writtenDate;
 const memberName = (member) => `${member.rank} ${member.operational_name}`;
 
 export default function MemberWingSelect({ member, competencyId, data, editable, onFeedback, onOpenChange }) {

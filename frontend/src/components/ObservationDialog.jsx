@@ -35,7 +35,7 @@ export default function ObservationDialog({ assignment, contextLabel, members, p
   return createPortal(<div className="modal-backdrop observation-backdrop" role="presentation">
     <section className="edit-modal observation-dialog" ref={dialog} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby={`${id}-title`} aria-busy={pending}>
       <div className="modal-header"><div><span className="eyebrow">ANOTAÇÃO DO SERVIÇO</span><h2 id={`${id}-title`}>Observação</h2></div><button type="button" className="close-button" aria-label="Fechar observação" disabled={pending} onClick={onClose}>×</button></div>
-      <p className="observation-context">{contextLabel}</p>
+      <div className="schedule-change-notice" role="note"><span>CONFIRA ANTES DE CONFIRMAR</span><strong>{contextLabel}</strong></div>
       <form onSubmit={(event) => { event.preventDefault(); if (!invalid && !unchanged && !pending) onSave(value || null); }}>
         <label htmlFor={`${id}-text`}>Texto da observação<input id={`${id}-text`} ref={input} list={`${id}-suggestions`} value={text} maxLength={160} disabled={pending} onChange={(event) => setText(event.target.value)} placeholder="Ex.: Sgt Jansen, ATESTADO, DISPENSADO" autoComplete="off" aria-describedby={`${id}-help`} aria-invalid={invalid} /></label>
         <datalist id={`${id}-suggestions`}><option value="ATESTADO" /><option value="DISPENSADO" /><option value="LICENÇA" />{members.filter((member) => member.id !== assignment.memberId).map((member) => <option key={member.id} value={`${member.rank} ${member.operational_name}`} />)}</datalist>

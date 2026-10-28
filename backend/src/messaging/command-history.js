@@ -59,7 +59,28 @@ function combinedChanges(rows) {
 const parse = (value) => value === null ? null : JSON.parse(value);
 const meaningful = (value) => value && Object.fromEntries(Object.entries(value).filter(([key]) => key !== 'updated_at'));
 
-export async function recordWhatsAppCommand({ groupJid, actorMemberId, messageId, commandText, permission = 'SELF' }, callback) {
+function withChangedMonths(result, changes, fallbackCompetencyId) {
+  const ids = new Set();
+  const names = new Map();
+  for (const change of changes) for (const saved of [parse(change.before_json), parse(change.after_json)].filter(Boolean)) {
+    if (saved.competency_id) ids.add(saved.competency_id);
+    if (change.table_name === 'competencies') { ids.add(saved.id); names.set(saved.id, saved.name); }
+    if (change.table_name === 'assignments') {
+      const slot = db.prepare('SELECT competency_id FROM service_slots WHERE id=?').get(saved.service_slot_id);
+      if (slot) ids.add(slot.competency_id);
+    }
+    if (change.table_name === 'system_settings' && saved.key === 'bot_active_competency_id' && saved.value) ids.add(Number(saved.value));
+  }
+  if (!ids.size && fallbackCompetencyId) ids.add(fallbackCompetencyId);
+  const months = [...ids].map((id) => db.prepare('SELECT name FROM competencies WHERE id=?').get(id)?.name ?? names.get(id)).filter(Boolean);
+  const text = typeof result === 'string' ? result : result?.type === 'TEXT' ? result.text : null;
+  if (!text || !months.length || months.every((month) => text.includes(month))) return result;
+  const annotated = `${text}\n\n*Mês alterado: ${months.join('; ')}*`;
+  return typeof result === 'string' ? annotated : { ...result, text: annotated };
+}
+
+export async function recordWhatsAppCommand({ groupJid, actorMemberId, messageId, commandText, permission = 'SELF',
+  reportChangedMonths = false, fallbackCompetencyId = null }, callback) {
   const text = String(commandText).trim().replace(/^\/+\s*/, '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase();
   const query = /^(?:MENU|AJUDA|COMANDOS|MESES|STATUS|MINHAS|HORAS|VAGAS|ESCALA|MES|CRONOGRAMA|CONROGRAMA|MOSTRAR\s+(?:CRONOGRAMA|CONROGRAMA))\b/.test(text)
     && !/^ESCALA\s+(?:ZAP|WHATSAPP)\s/.test(text);
@@ -68,13 +89,16 @@ export async function recordWhatsAppCommand({ groupJid, actorMemberId, messageId
   const id = Number(db.prepare(`INSERT INTO whatsapp_command_history
     (group_jid,actor_member_id,message_id,command_text,permission,created_at) VALUES (?,?,?,?,?,?)`)
     .run(groupJid, actorMemberId, messageId, String(commandText).slice(0, 2000), permission, now()).lastInsertRowid);
-  try { return await context.run(id, callback); }
+  let result;
+  let changes;
+  try { result = await context.run(id, callback); }
   finally {
-    const changes = combinedChanges(rowsFor(id));
-    if (changes.some((row) => !isDeepStrictEqual(meaningful(parse(row.before_json)), meaningful(parse(row.after_json))))) {
+    changes = combinedChanges(rowsFor(id)).filter((row) => !isDeepStrictEqual(meaningful(parse(row.before_json)), meaningful(parse(row.after_json))));
+    if (changes.length) {
       db.prepare('UPDATE whatsapp_command_history SET completed_at=? WHERE id=?').run(now(), id);
     } else db.prepare('DELETE FROM whatsapp_command_history WHERE id=?').run(id);
   }
+  return reportChangedMonths && changes.length ? withChangedMonths(result, changes, fallbackCompetencyId) : result;
 }
 
 class UndoConflict extends Error {}
@@ -98,6 +122,12 @@ export function undoLastWhatsAppCommand({ groupJid, actorMemberId, panelAdminist
         const rows = rowsFor(command.id);
         const combined = combinedChanges(rows);
         const competencyIds = new Set();
+        const competencyNames = new Map();
+        const rememberCompetency = (id, name = null) => {
+          competencyIds.add(id);
+          const label = name ?? db.prepare('SELECT name FROM competencies WHERE id=?').get(id)?.name;
+          if (label) competencyNames.set(id, label);
+        };
         const affectedSlots = new Set();
         for (const row of combined) {
           const meta = metadata.get(row.table_name);
@@ -107,10 +137,14 @@ export function undoLastWhatsAppCommand({ groupJid, actorMemberId, panelAdminist
           const current = db.prepare(`SELECT * FROM ${quote(row.table_name)} WHERE ${where}`).get(...meta.keys.map((name) => key[name])) ?? null;
           if (!isDeepStrictEqual(current, parse(row.after_json))) conflict();
           for (const saved of [parse(row.before_json), parse(row.after_json)].filter(Boolean)) {
-            if (saved.competency_id) competencyIds.add(saved.competency_id);
-            if (row.table_name === 'competencies') competencyIds.add(saved.id);
+            if (saved.competency_id) rememberCompetency(saved.competency_id);
+            if (row.table_name === 'competencies') rememberCompetency(saved.id, saved.name);
             if (row.table_name === 'service_slots') affectedSlots.add(saved.id);
-            if (row.table_name === 'assignments') affectedSlots.add(saved.service_slot_id);
+            if (row.table_name === 'assignments') {
+              affectedSlots.add(saved.service_slot_id);
+              const slot = db.prepare('SELECT competency_id FROM service_slots WHERE id=?').get(saved.service_slot_id);
+              if (slot) rememberCompetency(slot.competency_id);
+            }
           }
         }
         for (const row of [...rows].reverse()) {
@@ -159,7 +193,7 @@ export function undoLastWhatsAppCommand({ groupJid, actorMemberId, panelAdminist
         audit({ action: 'WHATSAPP_UNDO_COMMAND', entityType: 'WHATSAPP_COMMAND', entityId: command.id,
           before: { command: command.command_text }, after: { actorMemberId, groupJid }, reason: 'Última forma pelo WhatsApp' });
         return { text: `*ÚLTIMA AÇÃO DESFEITA*\n${command.command_text}\n\nOs dados anteriores foram restaurados.`,
-          competencyIds: [...competencyIds], commandId: command.id };
+          competencyIds: [...competencyIds], competencyNames: [...competencyNames.values()], commandId: command.id };
       })();
     } catch (error) {
       if (error instanceof UndoConflict || String(error.code).startsWith('SQLITE_CONSTRAINT')) {

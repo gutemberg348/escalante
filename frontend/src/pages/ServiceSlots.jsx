@@ -4,8 +4,10 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client.js';
 import { useMonthRollover } from '../hooks/useMonthRollover.js';
 import DeleteMonthButton from '../components/DeleteMonthButton.jsx';
+import ScheduleChangeNotice from '../components/ScheduleChangeNotice.jsx';
+import { writtenDate } from '../utils/schedule-context.js';
 
-const dateLabel = (date) => new Date(`${date}T00:00`).toLocaleDateString('pt-BR');
+const dateLabel = writtenDate;
 const periodLabel = (period) => period === 'DIURNO' ? 'Dia · 07h às 19h' : 'Noite · 19h às 07h';
 const monthNames = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
 
@@ -82,6 +84,7 @@ export default function ServiceSlots() {
       queryClient.invalidateQueries({ queryKey: ['seniority'] });
       setColumnConflict(null);
       setSettingsOpen(false);
+      setMonthFeedback(`${selectedCompetency?.name}: colunas atualizadas em ${scope === 'MONTH' ? 'todos os dias do mês' : selectedDates.map(writtenDate).join(', ')}.`);
     },
     onError: (error, variables) => {
       if (error.response?.data?.code === 'COLUMN_POSITIONS_OCCUPIED') {
@@ -207,6 +210,7 @@ export default function ServiceSlots() {
 
     {settingsOpen && <div className="modal-backdrop" role="presentation"><section className="edit-modal month-settings-modal" role="dialog" aria-modal="true" aria-label="Configurações das colunas">
       <div className="modal-header"><div><span className="eyebrow">COLUNAS DA ESCALA</span><h2>{selectedCompetency?.name}</h2></div><button className="close-button" onClick={() => setSettingsOpen(false)} aria-label="Fechar">×</button></div>
+      <ScheduleChangeNotice month={selectedCompetency?.name}><p>{scope === 'MONTH' ? 'A alteração será aplicada em todos os dias deste mês, nos turnos de dia e noite.' : selectedDates.length ? `Datas: ${selectedDates.map(writtenDate).join('; ')}. Turnos de dia e noite.` : 'Selecione as datas deste mês que serão alteradas.'}</p></ScheduleChangeNotice>
       <p className="modal-copy">A 1ª e a 2ª posições permanecem abertas. Liberar a 3ª ou a 4ª apenas disponibiliza a coluna; a fila só começa quando o cronograma for iniciado com data e coluna.</p>
       <div className="column-setting-step"><strong>1. Onde alterar?</strong><div className="settings-choice"><button type="button" className={scope === 'MONTH' ? 'selected' : 'secondary-button'} onClick={() => { setScope('MONTH'); setSelectedDates([]); setColumnConflict(null); }}>Mês inteiro</button><button type="button" className={scope === 'DATES' ? 'selected' : 'secondary-button'} onClick={() => { setScope('DATES'); setSelectedDates([]); setColumnConflict(null); }}>Dias específicos</button></div></div>
       <div className="column-setting-step"><strong>2. Qual coluna?</strong><div className="settings-choice"><button type="button" className={targetColumn === 3 ? 'selected' : 'secondary-button'} onClick={() => { setTargetColumn(3); setColumnConflict(null); }}>3ª coluna</button><button type="button" className={targetColumn === 4 ? 'selected' : 'secondary-button'} onClick={() => { setTargetColumn(4); setColumnConflict(null); }}>4ª coluna</button></div></div>

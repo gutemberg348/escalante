@@ -51,6 +51,8 @@ No celular, **Gerenciar escala** organiza as posições em cartões por data e t
 
 ### Observações nos serviços
 
+Ao alterar serviços, o painel destaca a competência e a data por extenso, o turno e a coluna. Incluir, substituir ou remanejar abre uma revisão final; **Mudar tipo** também exige confirmação, mostrando **Ordinário (preto)** e **Extra (vermelho)** e o efeito nas horas. A mensagem de sucesso mantém o mês e a data da operação. Situação no Efetivo exige confirmação com o mês selecionado. Alterações de alas e colunas mostram as datas por extenso. Esses avisos são do frontend e não executam migração, correção de dados ou regeração ao publicar a versão.
+
 Em **Gerenciar escala**, cada serviço ocupado possui o botão **Observação**, disponível para administradores e escalantes. Informe um texto livre, como `Sgt Jansen` para permuta, `ATESTADO`, `DISPENSADO` ou outra anotação. A prévia mostra o resultado: `Sgt Fragoso (Sgt Jansen)`. Os parênteses são automáticos; limite de 160 caracteres, em uma linha.
 
 A observação vale somente para o militar, dia e turno selecionados. Não troca o militar nem altera coluna, tipo de serviço, protocolo ou horas. Funciona em ordinários e extras. Use **Limpar texto** e salve para remover a anotação existente. As anotações registradas pelo WhatsApp também podem ser editadas nessa janela.

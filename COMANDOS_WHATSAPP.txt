@@ -49,12 +49,14 @@ Para escolher o mês da marcação:
    @Escalante marque @Militar dia 20 noite no mês 11
 
 Sem informar o mês, usa o mês selecionado na configuração WhatsApp do painel
-ou pelo último comando /escala com mês. Informar o mês numa marcação vale
+ou pelo último comando /escala zap com mês. Informar o mês numa marcação vale
 somente para aquele pedido e não muda a seleção dos próximos comandos.
 "Este mês" e "mês que vem" usam a data atual. Nome ou número sem ano usa o ano
 do mês selecionado. Para outro ano, informe-o: novembro de 2027 ou 11/2027.
 Envie somente um mês por mensagem. Se ele ainda não foi gerado, o bot avisa
 e não marca em outro mês. A confirmação mostra o mês usado.
+As respostas de retirada, troca, remanejamento, observação, alteração de
+situação, colunas e desfazer também informam por escrito o mês alterado.
 
 
 2. MARCAR OUTRO MILITAR
@@ -63,12 +65,20 @@ e não marca em outro mês. A confirmação mostra o mês usado.
    @Escalante marque @Militar dia 20 dia
    @Escalante coloque @Militar dia 20 noite
    @Escalante escalar @Militar dia 20 24h
+   @Escalante lançar @Militar dia 20 24h
+   @Escalante lançar o Sgt Duarte dia 12 *24h
+   @Escalante lançar o Sgt Duarte "dia 22" 24h
+
+Também aceita o nome escrito, sem marcar o contato, quando corresponder a um
+único militar cadastrado. Use o nome de guerra completo, com ou sem o posto.
+Nome desconhecido ou repetido não gera marcação; nesse caso, marque usando @.
 
 Palavras aceitas para marcar:
    coloca, colocar, coloque
    põe, por, ponha
    bota, botar, bote
    marca, marcar, marque
+   lança, lançar, lance
    escala, escalar
    inclua
    adiciona, adicionar
@@ -190,6 +200,10 @@ Somente "12h" não define o turno; escreva dia ou noite.
    @Escalante excluir @Militar dia 19 24h
    @Escalante remover @Militar hoje dia
    @Escalante apagar @Militar dia 19
+   @Escalante desmarcar @Militar dia 19 noite
+   @Escalante cancelar @Militar dia 19 dia
+   @Escalante desmarcar 12 horas noite do dia de amanhã
+   @Escalante retirar Sgt Pedro Neto dia 19 noite
 
 Palavras aceitas:
    retirar, retira, retire
@@ -197,10 +211,16 @@ Palavras aceitas:
    excluir, exclui, exclua
    remover, remove, remova
    apagar, apaga, apague
+   desmarcar, desmarca, desmarque
+   cancelar, cancela, cancele
 
 O bot tolera erro de uma letra nesses verbos.
 Sem informar o turno, remove todos os serviços extras do militar naquele dia.
 Serviço ordinário não é removido por esse comando.
+Desmarcar, cancelar e retirar têm o mesmo efeito: removem o serviço extra.
+Sem outro militar informado, o pedido é para quem enviou a mensagem. Pode
+responder a uma mensagem do bot com "desmarcar 12 horas noite do dia de amanhã".
+O comando /cancelar 125 continua retirando pelo código do horário.
 
 
 6. CANCELAR UM SERVIÇO EXTRA PELO CÓDIGO
@@ -269,6 +289,14 @@ militar entre parênteses; para trocar efetivamente os serviços, use "troque".
 Trocar um militar por outro no mesmo horário:
    @Escalante troque @Militar1 dia 17 noite por @Militar2
    @Escalante substituir @Militar1 dia 17 noite por @Militar2
+   @Escalante retirar Pedro Neto do dia 28, lançar só o Sgt Jansen
+   @Escalante retirar @Militar1 dia 28 noite, lançar só o @Militar2
+
+Na forma "retirar ..., lançar ...", os extras passam para o outro militar na
+mesma coluna e com o mesmo tipo. Sem turno, troca os extras existentes de dia
+e noite. Ordinários ficam preservados. Se houver impedimento em qualquer
+horário de destino, nenhuma parte dessa troca será feita.
+Também pode informar o mês nessa frase: "dia 28 mês 11" ou "dia 28 deste mês".
 
 Trocar dois militares entre horários:
    @Escalante troque @Militar1 dia 17 noite com @Militar2 dia 20 dia

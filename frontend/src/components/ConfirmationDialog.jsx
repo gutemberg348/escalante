@@ -2,7 +2,7 @@ import { useEffect, useId, useRef } from 'react';
 import { createPortal } from 'react-dom';
 
 export default function ConfirmationDialog({ title, children, error, pending, confirmDisabled, confirmLabel,
-  pendingLabel = 'Excluindo…', onClose, onConfirm }) {
+  pendingLabel = 'Excluindo…', destructive = true, onClose, onConfirm }) {
   const titleId = useId();
   const dialog = useRef(null);
   const actions = useRef({ pending, onClose });
@@ -34,7 +34,7 @@ export default function ConfirmationDialog({ title, children, error, pending, co
       <div className="modal-header"><h2 id={titleId}>{title}</h2><button type="button" className="close-button" disabled={pending} aria-label="Fechar confirmação" onClick={onClose}>×</button></div>
       <div className="confirmation-dialog-body">{children}{error && <p className="error" role="alert">{error}</p>}</div>
       <div className="form-actions"><button data-confirm-cancel type="button" className="secondary-button" disabled={pending} onClick={onClose}>Cancelar</button>
-        <button type="button" className="danger-button" disabled={pending || confirmDisabled} onClick={onConfirm}>{pending ? pendingLabel : confirmLabel}</button></div>
+        <button type="button" className={destructive ? 'danger-button' : undefined} disabled={pending || confirmDisabled} onClick={onConfirm}>{pending ? pendingLabel : confirmLabel}</button></div>
     </section>
   </div>, document.body);
 }

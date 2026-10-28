@@ -13,9 +13,9 @@ export function parseMarkingRequest(body, { month = null, year = null, today = n
   };
   let text = String(body ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase()
     .replace(/@\S+/g, ' ').replace(/\r?\n/g, ';').replace(/[–—]/g, '-')
-    .replace(/["'“”‘’]/g, ' ').replace(/\?+\s*$/, ' ')
+    .replace(/["'“”‘’*]/g, ' ').replace(/\?+\s*$/, ' ')
     .replace(/\b(?:NO\s+DIA\s+DE\s+|DIA\s+DE\s+)?(?:HOJE|HOJ|HJ)\b/g, relativeDate(0))
-    .replace(/\bAMANHA\b/g, relativeDate(1));
+    .replace(/\b(?:(?:NO|DO)\s+)?(?:DIA\s+DE\s+)?AMANHA\b/g, relativeDate(1));
   const hasNumber = /\d/.test(text);
   const invalid = (message = guidance) => ({ choices: [], error: message });
   if (hasNumber && /\?|\b(?:OU|TALVEZ|NAO|EXCETO|MENOS|CANCELA\w*|RETIRA\w*|REMOVE\w*)\b/.test(text)) return invalid();

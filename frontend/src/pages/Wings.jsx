@@ -3,9 +3,10 @@ import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client.js';
 import { useMonthRollover } from '../hooks/useMonthRollover.js';
+import { writtenDate } from '../utils/schedule-context.js';
 
 const name = (member) => `${member.rank} ${member.operational_name}`;
-const dateLabel = (value) => value ? value.slice(0, 10).split('-').reverse().join('/') : '';
+const dateLabel = writtenDate;
 const statusLabel = { ACTIVE: 'Ativo', VACATION: 'Férias', LEAVE: 'Licença', AWAY: 'Afastado', INACTIVE: 'Desativado' };
 const localToday = () => new Date().toLocaleDateString('en-CA');
 const monthLabel = (value) => value ? new Date(`${value.slice(0, 7)}-01T12:00:00`).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' }) : '';
