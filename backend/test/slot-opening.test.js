@@ -18,6 +18,7 @@ runMigrations();
 const stamp = now();
 db.prepare("INSERT INTO users(id,name,email,password_hash,role,created_at,updated_at) VALUES (1,'Teste','opening@example.com','hash','ADMIN',?,?)").run(stamp, stamp);
 db.prepare("INSERT INTO members(id,rank,operational_name,unit_type,created_at,updated_at) VALUES (1,'Sgt','Teste','CICC',?,?)").run(stamp, stamp);
+db.prepare("INSERT INTO members(id,rank,operational_name,unit_type,created_at,updated_at) VALUES (2,'Sgt','Outro','CICC',?,?)").run(stamp, stamp);
 const { competency } = ensureCompetencySchedule('2031-11-01');
 const { competency: otherMonth } = ensureCompetencySchedule('2031-12-01');
 db.prepare('UPDATE competencies SET generated_at=?').run(stamp);
@@ -33,6 +34,12 @@ await new Promise((resolve) => server.once('listening', resolve));
 const url = `http://127.0.0.1:${server.address().port}/slots`;
 const open = async (position = 3, role = 'ADMIN', id = slot.id, body = { competencyId: competency.id }) => {
   const response = await fetch(`${url}/${id}/positions/${position}/open`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'x-test-role': role }, body: JSON.stringify(body)
+  });
+  return { status: response.status, data: await response.json() };
+};
+const close = async (position = 3, role = 'ADMIN', id = slot.id, body = { competencyId: competency.id }) => {
+  const response = await fetch(`${url}/${id}/positions/${position}/close`, {
     method: 'POST', headers: { 'Content-Type': 'application/json', 'x-test-role': role }, body: JSON.stringify(body)
   });
   return { status: response.status, data: await response.json() };
@@ -141,4 +148,96 @@ test('day-wide opening and closing still apply to both shifts after an individua
     assert.equal(response.status, 200);
     assert.deepEqual(db.prepare('SELECT DISTINCT current_capacity FROM service_slots WHERE competency_id=? AND service_date=?').all(competency.id, slot.service_date), [{ current_capacity: openColumns.length }]);
   }
+});
+
+for (const role of ['ADMIN', 'SCHEDULER']) test(`${role} closes only an empty cell in the selected shift, preserving assignments and other dates`, async () => {
+  await open(4);
+  await open(4, 'ADMIN', night.id);
+  const before = slots();
+  const assignments = db.prepare('SELECT * FROM assignments').all();
+  const result = await close(4, role);
+  assert.equal(result.status, 200);
+  assert.deepEqual(result.data.closedPositions, [4]);
+  assert.equal(result.data.item.current_capacity, 3);
+  assert.equal(result.data.competencyName, competency.name);
+  assert.deepEqual(slots().filter((item) => item.id !== slot.id), before.filter((item) => item.id !== slot.id));
+  assert.deepEqual(db.prepare('SELECT * FROM assignments').all(), assignments);
+  assert.deepEqual((await close(4, role)).data.closedPositions, []);
+  const audit = db.prepare("SELECT * FROM audit_logs WHERE action='MANUAL_SLOT_POSITION_CLOSE'").get();
+  assert.equal(JSON.parse(audit.before_json).current_capacity, 4);
+  assert.equal(JSON.parse(audit.after_json).current_capacity, 3);
+  await open(4);
+  assert.equal(db.prepare('SELECT current_capacity FROM service_slots WHERE id=?').get(slot.id).current_capacity, 4);
+});
+
+test('closing the third also closes the empty fourth, leaving the other shift open', async () => {
+  await open(4);
+  await open(4, 'ADMIN', night.id);
+  const result = await close(3);
+  assert.equal(result.status, 200);
+  assert.deepEqual(result.data.closedPositions, [3, 4]);
+  assert.equal(result.data.item.current_capacity, 2);
+  assert.equal(db.prepare('SELECT current_capacity FROM service_slots WHERE id=?').get(night.id).current_capacity, 4);
+});
+
+test('a booking made before confirming prevents closing it or any column it depends on, with no partial writes', async () => {
+  for (const position of [3, 4]) {
+    await open(4);
+    db.prepare(`INSERT INTO assignments (service_slot_id,position_number,member_id,service_type,status,protocol,confirmed_at,created_at,updated_at)
+      VALUES (?,?,2,'EXTRAORDINARY','CONFIRMED',?,?,?,?)`).run(slot.id, position, `occupied-${position}`, stamp, stamp, stamp);
+    const before = slots();
+    const assignments = db.prepare('SELECT * FROM assignments ORDER BY id').all();
+    const result = await close(position);
+    assert.equal(result.status, 409);
+    assert.match(result.data.message, /vagas vazias/);
+    assert.equal((await close(3)).status, 409);
+    assert.deepEqual(slots(), before);
+    assert.deepEqual(db.prepare('SELECT * FROM assignments ORDER BY id').all(), assignments);
+    db.prepare("DELETE FROM assignments WHERE protocol=?").run(`occupied-${position}`);
+  }
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM audit_logs WHERE action='MANUAL_SLOT_POSITION_CLOSE'").get().n, 0);
+});
+
+test('closing the empty fourth preserves an occupied third and ignores cancelled assignments', async () => {
+  await open(4);
+  db.prepare(`INSERT INTO assignments (service_slot_id,position_number,member_id,service_type,status,protocol,confirmed_at,created_at,updated_at)
+    VALUES (?,3,2,'EXTRAORDINARY','CONFIRMED','keep-third',?,?,?)`).run(slot.id, stamp, stamp, stamp);
+  db.prepare(`INSERT INTO assignments (service_slot_id,position_number,member_id,service_type,status,protocol,confirmed_at,created_at,updated_at)
+    VALUES (?,4,1,'EXTRAORDINARY','CANCELLED','old-fourth',?,?,?)`).run(slot.id, stamp, stamp, stamp);
+  const before = db.prepare('SELECT * FROM assignments ORDER BY id').all();
+  assert.equal((await close(4)).status, 200);
+  assert.deepEqual(db.prepare('SELECT * FROM assignments ORDER BY id').all(), before);
+});
+
+test('close enforces permissions, month, column range and slot/month state', async () => {
+  await open(4);
+  const before = slots();
+  for (const role of ['SYSTEM_OPERATOR', 'APPROVING_AUTHORITY']) assert.equal((await close(4, role)).status, 403);
+  for (const position of [0, 1, 2, 5, 'invalid']) assert.equal((await close(position)).status, 400);
+  assert.equal((await close(4, 'ADMIN', 999999)).status, 404);
+  for (const body of [{}, { competencyId: '1' }, { competencyId: competency.id, deleteOccupied: true }]) assert.equal((await close(4, 'ADMIN', slot.id, body)).status, 400);
+  assert.equal((await close(4, 'ADMIN', slot.id, { competencyId: otherMonth.id })).status, 409);
+  assert.deepEqual(slots(), before);
+  db.prepare("UPDATE service_slots SET status='CLOSED' WHERE id=?").run(slot.id);
+  assert.equal((await close(4)).status, 409);
+  db.prepare("UPDATE service_slots SET status='OPEN',homologated_at=? WHERE id=?").run(stamp, slot.id);
+  assert.equal((await close(4)).status, 409);
+  db.prepare('UPDATE service_slots SET homologated_at=NULL WHERE id=?').run(slot.id);
+  db.prepare("UPDATE competencies SET status='HOMOLOGATED' WHERE id=?").run(competency.id);
+  assert.equal((await close(4)).status, 409);
+  db.prepare("UPDATE competencies SET status='OPEN',generated_at=NULL WHERE id=?").run(competency.id);
+  assert.equal((await close(4)).status, 409);
+  assert.equal(db.prepare('SELECT current_capacity FROM service_slots WHERE id=?').get(slot.id).current_capacity, 4);
+});
+
+test('the PDF restores only the closed cell label while the other shift stays open', async () => {
+  await open(4);
+  await open(4, 'ADMIN', night.id);
+  const before = await pdfLabels();
+  await close(4);
+  const after = await pdfLabels();
+  const count = (text, word) => text.split(word).length - 1;
+  assert.equal(count(after, 'TRANCADA'), count(before, 'TRANCADA') + 1);
+  assert.equal(count(after, 'VAGA'), count(before, 'VAGA') - 1);
+  assert.equal(count(after, 'Sgt Teste'), count(before, 'Sgt Teste'));
 });

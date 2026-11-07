@@ -79,13 +79,17 @@ export default function ScheduleManagement() {
 
   const refresh = () => Promise.all(['schedule-management', 'slots', 'members', 'dashboard', 'slot-confirmations', 'pdf-columns'].map((key) => queryClient.invalidateQueries({ queryKey: [key] })));
   const openPosition = useMutation({
-    mutationFn: ({ slot, position, competencyId: monthId }) => api.post(`/service-slots/${slot.id}/positions/${position}/open`, { competencyId: monthId }),
+    mutationFn: ({ slot, position, competencyId: monthId, action = 'open' }) => api.post(`/service-slots/${slot.id}/positions/${position}/${action}`, { competencyId: monthId }),
     onSuccess: async (response, context) => {
       queryClient.setQueryData(['schedule-management', String(context.competencyId)], (current) => current ? { ...current,
         items: current.items.map((slot) => slot.id === context.slot.id ? { ...slot, ...response.data.item } : slot)
       } : current);
       setOpening(null);
-      setMonthFeedback(`${scheduleContext(context.month, context.slot, context.position)}: vaga aberta.${response.data.openedPositions.includes(3) && context.position === 4 ? ' A 3ª coluna também foi aberta neste turno.' : ''}`);
+      const closing = context.action === 'close';
+      const extra = closing
+        ? response.data.closedPositions.includes(4) && context.position === 3 ? ' A 4ª coluna também foi fechada neste turno.' : ''
+        : response.data.openedPositions.includes(3) && context.position === 4 ? ' A 3ª coluna também foi aberta neste turno.' : '';
+      setMonthFeedback(`${scheduleContext(context.month, context.slot, context.position)}: vaga ${closing ? 'fechada' : 'aberta'}.${extra}`);
       await refresh();
     },
     onError: (error) => { if (error.response?.status === 409) refresh(); }
@@ -199,6 +203,7 @@ export default function ScheduleManagement() {
               <ScheduleCell slot={slot} position={position} assignment={assignment} locked={locked} editable={editable} actionPending={actionPending}
                   canOpen={slot.status === 'OPEN' && !slot.homologated_at && schedule.competency.status !== 'HOMOLOGATED'}
                   onOpen={() => { openPosition.reset(); setOpening({ slot, position, month: schedule.competency.name, competencyId: Number(competencyId) }); }}
+                  onClose={() => { openPosition.reset(); setOpening({ slot, position, month: schedule.competency.name, competencyId: Number(competencyId), action: 'close' }); }}
                   onAdd={() => openEditor(slot, position)} onReplace={() => openEditor(slot, position, assignment)}
                   onMove={() => { moveAssignment.reset(); setMoving({ slot, position, assignment, month: schedule.competency.name }); setTarget(''); }} onRemove={() => removeAssignment(slot, position, assignment)}
                   onObservation={() => { saveObservation.reset(); setObserving({ slot, position, assignment, month: schedule.competency.name }); }}
@@ -211,12 +216,17 @@ export default function ScheduleManagement() {
       {!days.length && <p className="empty-table">Não há horários preparados neste mês.</p>}
     </section>}
 
-    {opening && <ConfirmationDialog title="Abrir esta vaga?" destructive={false}
-      pending={openPosition.isPending} pendingLabel="Abrindo…" confirmLabel="Abrir vaga" onClose={() => setOpening(null)}
-      onConfirm={() => openPosition.mutate(opening)} error={openPosition.error ? openPosition.error.response?.data?.message || 'Não foi possível abrir a vaga. Tente novamente.' : ''}>
+    {opening && <ConfirmationDialog title={opening.action === 'close' ? 'Fechar esta vaga?' : 'Abrir esta vaga?'} destructive={false}
+      pending={openPosition.isPending} pendingLabel="Salvando…" confirmLabel={opening.action === 'close' ? 'Fechar vaga' : 'Abrir vaga'} onClose={() => setOpening(null)}
+      onConfirm={() => openPosition.mutate(opening)} error={openPosition.error ? openPosition.error.response?.data?.message || 'Não foi possível alterar a vaga. Tente novamente.' : ''}>
       <ScheduleChangeNotice month={opening.month} slot={opening.slot} position={opening.position} />
-      <p>A vaga será liberada somente nesta data e neste turno. Depois, use <strong>Adicionar</strong> para escolher o militar.</p>
-      {opening.position === 4 && Number(opening.slot.current_capacity) < 3 && <p>A 4ª coluna depende da 3ª. As duas serão abertas somente neste turno.</p>}
+      {opening.action === 'close' ? <>
+        <p>A vaga vazia ficará trancada somente nesta data e neste turno.</p>
+        {opening.position === 3 && Number(opening.slot.current_capacity) >= 4 && <p>A 4ª coluna depende da 3ª e também será fechada neste turno. As duas precisam estar vazias; se houver militar marcado, o fechamento será bloqueado.</p>}
+      </> : <>
+        <p>A vaga será liberada somente nesta data e neste turno. Depois, use <strong>Adicionar</strong> para escolher o militar.</p>
+        {opening.position === 4 && Number(opening.slot.current_capacity) < 3 && <p>A 4ª coluna depende da 3ª. As duas serão abertas somente neste turno.</p>}
+      </>}
     </ConfirmationDialog>}
 
     {observing && <ObservationDialog assignment={observing.assignment} members={members} pending={saveObservation.isPending}
@@ -266,10 +276,14 @@ export default function ScheduleManagement() {
   </>;
 }
 
-function ScheduleCell({ slot, position, assignment, locked, editable, canOpen, onOpen, onAdd, onReplace, onMove, onRemove, onToggleType, onObservation, typePending, actionPending }) {
+function ScheduleCell({ slot, position, assignment, locked, editable, canOpen, onOpen, onClose, onAdd, onReplace, onMove, onRemove, onToggleType, onObservation, typePending, actionPending }) {
   if (locked) return <div className="roster-position is-locked"><strong>Trancada</strong>{editable && canOpen && <button type="button" className="roster-action roster-open" disabled={actionPending} onClick={onOpen}
     aria-label={`Abrir vaga da ${position}ª coluna, ${periodLabel(slot.period)}, ${dateLabel(slot.service_date)}`}>Abrir vaga</button>}</div>;
-  if (!assignment) return <div className="roster-position is-vacant"><strong>Vaga livre</strong>{editable && <button type="button" className="roster-action roster-add" disabled={actionPending} onClick={onAdd}>+ Adicionar</button>}</div>;
+  if (!assignment) return <div className="roster-position is-vacant"><strong>Vaga livre</strong>{editable && <div className="roster-vacancy-actions">
+    <button type="button" className="roster-action roster-add" disabled={actionPending} onClick={onAdd}>+ Adicionar</button>
+    {canOpen && position >= 3 && <button type="button" className="roster-action roster-close" disabled={actionPending} onClick={onClose}
+      aria-label={`Fechar vaga da ${position}ª coluna, ${periodLabel(slot.period)}, ${dateLabel(slot.service_date)}`}>Fechar vaga</button>}
+  </div>}</div>;
   const extraAssignment = assignment.serviceType === 'EXTRAORDINARY';
   return <div className={`roster-position is-occupied ${extraAssignment ? 'is-extra' : ''}`}>
     <div className="roster-position-heading"><span className={`roster-service-type ${extraAssignment ? 'is-extra' : ''}`}>{extraAssignment ? 'Extra' : 'Ordinário'}</span></div>

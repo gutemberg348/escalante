@@ -128,10 +128,11 @@ router.get('/pdf', (req, res, next) => {
   } catch (error) { next(error); }
 });
 
-router.post('/:slotId/positions/:positionNumber/open', allow('ADMIN', 'SCHEDULER'), (req, res, next) => {
+router.post('/:slotId/positions/:positionNumber/:action', allow('ADMIN', 'SCHEDULER'), (req, res, next) => {
   try {
     const slotId = z.coerce.number().int().positive().parse(req.params.slotId);
     const positionNumber = z.coerce.number().int().min(3).max(4).parse(req.params.positionNumber);
+    const action = z.enum(['open', 'close']).parse(req.params.action);
     const input = z.object({ competencyId: z.number().int().positive() }).strict().parse(req.body);
     const result = db.transaction(() => {
       const before = db.prepare('SELECT * FROM service_slots WHERE id=?').get(slotId);
@@ -139,16 +140,22 @@ router.post('/:slotId/positions/:positionNumber/open', allow('ADMIN', 'SCHEDULER
       if (before.competency_id !== input.competencyId) return { status: 409, message: 'Esta vaga não pertence ao mês informado. Atualize a escala.' };
       const competency = db.prepare('SELECT name,status,generated_at FROM competencies WHERE id=?').get(input.competencyId);
       if (!competency?.generated_at || competency.status === 'HOMOLOGATED' || before.status !== 'OPEN' || before.homologated_at) {
-        return { status: 409, message: 'Não é possível abrir vaga em um horário fechado, homologado ou de mês não gerado.' };
+        return { status: 409, message: 'Não é possível alterar vaga em um horário fechado, homologado ou de mês não gerado.' };
       }
+      const capacity = action === 'open' ? Math.max(before.current_capacity, positionNumber) : Math.min(before.current_capacity, positionNumber - 1);
       const openedPositions = [];
-      for (let position = before.current_capacity + 1; position <= positionNumber; position += 1) openedPositions.push(position);
-      if (openedPositions.length) {
-        db.prepare('UPDATE service_slots SET current_capacity=?,updated_at=? WHERE id=?').run(positionNumber, now(), slotId);
-        audit({ userId: req.user.id, action: 'MANUAL_SLOT_POSITION_OPEN', entityType: 'SERVICE_SLOT', entityId: slotId,
+      const closedPositions = [];
+      for (let position = before.current_capacity + 1; position <= capacity; position += 1) openedPositions.push(position);
+      for (let position = capacity + 1; position <= before.current_capacity; position += 1) closedPositions.push(position);
+      if (action === 'close' && db.prepare("SELECT 1 FROM assignments WHERE service_slot_id=? AND position_number>? AND status='CONFIRMED' LIMIT 1").get(slotId, capacity)) {
+        return { status: 409, message: 'Só é possível fechar vagas vazias. A coluna escolhida ou uma coluna que depende dela está ocupada. Nenhuma marcação foi retirada.' };
+      }
+      if (capacity !== before.current_capacity) {
+        db.prepare('UPDATE service_slots SET current_capacity=?,updated_at=? WHERE id=?').run(capacity, now(), slotId);
+        audit({ userId: req.user.id, action: action === 'open' ? 'MANUAL_SLOT_POSITION_OPEN' : 'MANUAL_SLOT_POSITION_CLOSE', entityType: 'SERVICE_SLOT', entityId: slotId,
           before, after: db.prepare('SELECT * FROM service_slots WHERE id=?').get(slotId), req });
       }
-      return { item: db.prepare('SELECT * FROM service_slots WHERE id=?').get(slotId), openedPositions, competencyName: competency.name };
+      return { item: db.prepare('SELECT * FROM service_slots WHERE id=?').get(slotId), openedPositions, closedPositions, competencyName: competency.name };
     })();
     if (result.status) return res.status(result.status).json({ message: result.message });
     res.json(result);

@@ -312,6 +312,10 @@ html[data-theme="dark"] .wings-period-panel { --wing-tab-ink: #78d2f6; --wing-ta
 .roster-column .roster-position.is-locked { display: flex; flex-direction: column; justify-content: center; min-height: 45px; }
 .roster-calendar .roster-column button.roster-open { width: 100%; min-height: 44px; background: #147da4; border-color: #147da4; color: #fff; }
 .roster-calendar .roster-column button.roster-open:hover { background: #106686; border-color: #106686; }
+.roster-vacancy-actions { display: grid; gap: 7px; margin-top: auto; width: 100%; }
+.roster-calendar .roster-column button.roster-close { width: 100%; min-height: 44px; background: #fff0f2; color: #9a3046; border-color: #e4aeb9; }
+.roster-calendar .roster-column button.roster-close:hover { background: #fce1e7; }
+html[data-theme="dark"] .roster-calendar .roster-column button.roster-close { background: #402733; color: #f2b9c3; border-color: #784654; }
 .roster-column .roster-position.is-vacant>strong { font-size: 13px; }
 html[data-theme="dark"] .roster-column .roster-shift-day .roster-shift-heading h5 { color: #f5d08a; }
 html[data-theme="dark"] .roster-column .roster-shift-night .roster-shift-heading h5 { color: #b4caff; }
