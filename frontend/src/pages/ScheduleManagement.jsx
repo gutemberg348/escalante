@@ -27,13 +27,14 @@ export default function ScheduleManagement() {
   const [removing, setRemoving] = useState(null);
   const [observing, setObserving] = useState(null);
   const [review, setReview] = useState(null);
+  const [opening, setOpening] = useState(null);
   const { data: me } = useQuery({ queryKey: ['me'], queryFn: () => api.get('/auth/me').then((response) => response.data.user) });
   const { data: competencies = [] } = useQuery({ queryKey: ['competencies'], queryFn: () => api.get('/competencies').then((response) => response.data.items) });
   const generatedCompetencies = useMemo(() => competencies.filter((item) => item.generated_at), [competencies]);
   useMonthRollover(competencies, competencyId, (id) => {
     setCompetencyId(id);
     setSearchParams({ competency_id: id }, { replace: true });
-  }, Boolean(editor || moving || deletingMonth || removing || observing || review));
+  }, Boolean(editor || moving || deletingMonth || removing || observing || review || opening));
   const { data: schedule, isLoading } = useQuery({
     queryKey: ['schedule-management', competencyId],
     queryFn: () => api.get('/service-slots/manage', { params: { competency_id: competencyId } }).then((response) => response.data),
@@ -76,7 +77,19 @@ export default function ScheduleManagement() {
     setSearchParams({ competency_id: nextId }, { replace: true });
   }, [generatedCompetencies, competencyId, setSearchParams]);
 
-  const refresh = () => Promise.all(['schedule-management', 'slots', 'members', 'dashboard', 'slot-confirmations'].map((key) => queryClient.invalidateQueries({ queryKey: [key] })));
+  const refresh = () => Promise.all(['schedule-management', 'slots', 'members', 'dashboard', 'slot-confirmations', 'pdf-columns'].map((key) => queryClient.invalidateQueries({ queryKey: [key] })));
+  const openPosition = useMutation({
+    mutationFn: ({ slot, position, competencyId: monthId }) => api.post(`/service-slots/${slot.id}/positions/${position}/open`, { competencyId: monthId }),
+    onSuccess: async (response, context) => {
+      queryClient.setQueryData(['schedule-management', String(context.competencyId)], (current) => current ? { ...current,
+        items: current.items.map((slot) => slot.id === context.slot.id ? { ...slot, ...response.data.item } : slot)
+      } : current);
+      setOpening(null);
+      setMonthFeedback(`${scheduleContext(context.month, context.slot, context.position)}: vaga aberta.${response.data.openedPositions.includes(3) && context.position === 4 ? ' A 3ª coluna também foi aberta neste turno.' : ''}`);
+      await refresh();
+    },
+    onError: (error) => { if (error.response?.status === 409) refresh(); }
+  });
   const saveObservation = useMutation({
     mutationFn: ({ assignment, displayPrefix }) => api.patch(`/service-slots/assignments/${assignment.id}/observation`, { displayPrefix, expectedUpdatedAt: assignment.updatedAt }),
     onSuccess: async (response, { assignment, displayPrefix, context }) => {
@@ -142,7 +155,7 @@ export default function ScheduleManagement() {
   };
   const actionError = savePosition.error || moveAssignment.error || changeServiceType.error;
   const reviewMutation = review?.kind === 'SAVE' ? savePosition : review?.kind === 'MOVE' ? moveAssignment : changeServiceType;
-  const actionPending = savePosition.isPending || moveAssignment.isPending || changeServiceType.isPending || removePosition.isPending || saveObservation.isPending;
+  const actionPending = savePosition.isPending || moveAssignment.isPending || changeServiceType.isPending || removePosition.isPending || saveObservation.isPending || openPosition.isPending;
 
   return <>
     <header className="page-header"><div><span className="eyebrow">ADMINISTRAÇÃO DA ESCALA</span><h1>Gerenciar escala</h1><p>Edite a planilha mensal: inclua, troque, mova ou retire militares de qualquer vaga aberta.</p></div>
@@ -152,7 +165,7 @@ export default function ScheduleManagement() {
         }} />}</div>
     </header>
 
-    <section className="panel schedule-manager-filter"><div><span className="eyebrow">MÊS DA ESCALA</span><h2>{schedule?.competency?.name || 'Selecione o mês'}</h2><p>Somente meses já gerados aparecem aqui. O PDF usa o mesmo layout encaminhado pelo WhatsApp.</p></div><label>Competência<select disabled={!generatedCompetencies.length || actionPending || Boolean(removing || editor || moving || deletingMonth || observing || review)} value={competencyId} onChange={(event) => { const id = event.target.value; setCompetencyId(id); setSearchParams({ competency_id: id }, { replace: true }); }}>{!generatedCompetencies.length && <option value="">Nenhum mês gerado</option>}{generatedCompetencies.map((competency) => <option key={competency.id} value={competency.id}>{competency.name}</option>)}</select></label></section>
+    <section className="panel schedule-manager-filter"><div><span className="eyebrow">MÊS DA ESCALA</span><h2>{schedule?.competency?.name || 'Selecione o mês'}</h2><p>Somente meses já gerados aparecem aqui. O PDF usa o mesmo layout encaminhado pelo WhatsApp.</p></div><label>Competência<select disabled={!generatedCompetencies.length || actionPending || Boolean(removing || editor || moving || deletingMonth || observing || review || opening)} value={competencyId} onChange={(event) => { const id = event.target.value; setCompetencyId(id); setSearchParams({ competency_id: id }, { replace: true }); }}>{!generatedCompetencies.length && <option value="">Nenhum mês gerado</option>}{generatedCompetencies.map((competency) => <option key={competency.id} value={competency.id}>{competency.name}</option>)}</select></label></section>
 
     {!editable && <p className="error">Seu perfil pode consultar a escala e baixar o PDF, mas as alterações são restritas a administradores e escalantes.</p>}
     {monthFeedback && <p className="success" role="status">{monthFeedback}</p>}
@@ -184,6 +197,8 @@ export default function ScheduleManagement() {
             return <section className={`roster-shift ${isDay ? 'roster-shift-day' : 'roster-shift-night'}`} key={slot.id} aria-label={`${dateLabel(day.date)} · ${periodLabel(period)}`}>
               <div className="roster-shift-heading"><span className="roster-shift-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">{isDay ? <><circle cx="12" cy="12" r="4" /><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5" /></> : <path d="M20.8 13.2A9 9 0 0 1 10.8 3.1 9 9 0 1 0 20.8 13.2Z" />}</svg></span><h5>{isDay ? 'Dia' : 'Noite'}<span>{isDay ? '07h às 19h' : '19h às 07h'}{!isDay && <small>do dia seguinte</small>}</span></h5></div>
               <ScheduleCell slot={slot} position={position} assignment={assignment} locked={locked} editable={editable} actionPending={actionPending}
+                  canOpen={slot.status === 'OPEN' && !slot.homologated_at && schedule.competency.status !== 'HOMOLOGATED'}
+                  onOpen={() => { openPosition.reset(); setOpening({ slot, position, month: schedule.competency.name, competencyId: Number(competencyId) }); }}
                   onAdd={() => openEditor(slot, position)} onReplace={() => openEditor(slot, position, assignment)}
                   onMove={() => { moveAssignment.reset(); setMoving({ slot, position, assignment, month: schedule.competency.name }); setTarget(''); }} onRemove={() => removeAssignment(slot, position, assignment)}
                   onObservation={() => { saveObservation.reset(); setObserving({ slot, position, assignment, month: schedule.competency.name }); }}
@@ -195,6 +210,14 @@ export default function ScheduleManagement() {
         </section>)}</div>
       {!days.length && <p className="empty-table">Não há horários preparados neste mês.</p>}
     </section>}
+
+    {opening && <ConfirmationDialog title="Abrir esta vaga?" destructive={false}
+      pending={openPosition.isPending} pendingLabel="Abrindo…" confirmLabel="Abrir vaga" onClose={() => setOpening(null)}
+      onConfirm={() => openPosition.mutate(opening)} error={openPosition.error ? openPosition.error.response?.data?.message || 'Não foi possível abrir a vaga. Tente novamente.' : ''}>
+      <ScheduleChangeNotice month={opening.month} slot={opening.slot} position={opening.position} />
+      <p>A vaga será liberada somente nesta data e neste turno. Depois, use <strong>Adicionar</strong> para escolher o militar.</p>
+      {opening.position === 4 && Number(opening.slot.current_capacity) < 3 && <p>A 4ª coluna depende da 3ª. As duas serão abertas somente neste turno.</p>}
+    </ConfirmationDialog>}
 
     {observing && <ObservationDialog assignment={observing.assignment} members={members} pending={saveObservation.isPending}
       contextLabel={scheduleContext(observing.month, observing.slot, observing.position)}
@@ -243,8 +266,9 @@ export default function ScheduleManagement() {
   </>;
 }
 
-function ScheduleCell({ slot, position, assignment, locked, editable, onAdd, onReplace, onMove, onRemove, onToggleType, onObservation, typePending, actionPending }) {
-  if (locked) return <div className="roster-position is-locked"><strong>Trancada</strong></div>;
+function ScheduleCell({ slot, position, assignment, locked, editable, canOpen, onOpen, onAdd, onReplace, onMove, onRemove, onToggleType, onObservation, typePending, actionPending }) {
+  if (locked) return <div className="roster-position is-locked"><strong>Trancada</strong>{editable && canOpen && <button type="button" className="roster-action roster-open" disabled={actionPending} onClick={onOpen}
+    aria-label={`Abrir vaga da ${position}ª coluna, ${periodLabel(slot.period)}, ${dateLabel(slot.service_date)}`}>Abrir vaga</button>}</div>;
   if (!assignment) return <div className="roster-position is-vacant"><strong>Vaga livre</strong>{editable && <button type="button" className="roster-action roster-add" disabled={actionPending} onClick={onAdd}>+ Adicionar</button>}</div>;
   const extraAssignment = assignment.serviceType === 'EXTRAORDINARY';
   return <div className={`roster-position is-occupied ${extraAssignment ? 'is-extra' : ''}`}>

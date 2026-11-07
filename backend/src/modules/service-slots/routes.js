@@ -128,6 +128,33 @@ router.get('/pdf', (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+router.post('/:slotId/positions/:positionNumber/open', allow('ADMIN', 'SCHEDULER'), (req, res, next) => {
+  try {
+    const slotId = z.coerce.number().int().positive().parse(req.params.slotId);
+    const positionNumber = z.coerce.number().int().min(3).max(4).parse(req.params.positionNumber);
+    const input = z.object({ competencyId: z.number().int().positive() }).strict().parse(req.body);
+    const result = db.transaction(() => {
+      const before = db.prepare('SELECT * FROM service_slots WHERE id=?').get(slotId);
+      if (!before) return { status: 404, message: 'Horário não encontrado. Atualize a escala.' };
+      if (before.competency_id !== input.competencyId) return { status: 409, message: 'Esta vaga não pertence ao mês informado. Atualize a escala.' };
+      const competency = db.prepare('SELECT name,status,generated_at FROM competencies WHERE id=?').get(input.competencyId);
+      if (!competency?.generated_at || competency.status === 'HOMOLOGATED' || before.status !== 'OPEN' || before.homologated_at) {
+        return { status: 409, message: 'Não é possível abrir vaga em um horário fechado, homologado ou de mês não gerado.' };
+      }
+      const openedPositions = [];
+      for (let position = before.current_capacity + 1; position <= positionNumber; position += 1) openedPositions.push(position);
+      if (openedPositions.length) {
+        db.prepare('UPDATE service_slots SET current_capacity=?,updated_at=? WHERE id=?').run(positionNumber, now(), slotId);
+        audit({ userId: req.user.id, action: 'MANUAL_SLOT_POSITION_OPEN', entityType: 'SERVICE_SLOT', entityId: slotId,
+          before, after: db.prepare('SELECT * FROM service_slots WHERE id=?').get(slotId), req });
+      }
+      return { item: db.prepare('SELECT * FROM service_slots WHERE id=?').get(slotId), openedPositions, competencyName: competency.name };
+    })();
+    if (result.status) return res.status(result.status).json({ message: result.message });
+    res.json(result);
+  } catch (error) { next(error); }
+});
+
 router.put('/:slotId/positions/:positionNumber', allow('ADMIN', 'SCHEDULER'), (req, res, next) => {
   try {
     const slotId = z.coerce.number().int().positive().parse(req.params.slotId);
@@ -248,13 +275,11 @@ router.patch('/assignments/:id/type', allow('ADMIN', 'SCHEDULER'), (req, res, ne
 router.get('/pdf-columns', allow('ADMIN'), (req, res, next) => {
   try {
     const competencyId = z.coerce.number().int().positive().parse(req.query.competency_id);
-    const dates = db.prepare('SELECT DISTINCT service_date FROM service_slots WHERE competency_id=? ORDER BY service_date').all(competencyId);
-    const releases = new Map(db.prepare(`SELECT service_date,third_column_open,fourth_column_open
-      FROM schedule_pdf_column_releases WHERE competency_id=?`).all(competencyId).map((row) => [row.service_date, row]));
+    const dates = db.prepare(`SELECT service_date,MIN(current_capacity) AS capacity FROM service_slots
+      WHERE competency_id=? GROUP BY service_date ORDER BY service_date`).all(competencyId);
     res.json({ item: { competencyId, items: dates.map((row) => {
-      const release = releases.get(row.service_date);
-      const fourth = Boolean(release?.fourth_column_open);
-      const third = Boolean(release?.third_column_open || fourth);
+      const fourth = row.capacity >= 4;
+      const third = row.capacity >= 3;
       return { serviceDate: row.service_date, openColumns: [1, 2, ...(third ? [3] : []), ...(fourth ? [4] : [])] };
     }) } });
   } catch (error) { next(error); }

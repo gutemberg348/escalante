@@ -309,7 +309,9 @@ html[data-theme="dark"] .wings-period-panel { --wing-tab-ink: #78d2f6; --wing-ta
 .roster-column .roster-member-name { font-size: 13px; line-height: 1.5; }
 .roster-column .roster-actions { gap: 5px; }
 .roster-calendar .roster-column button.roster-action { min-height: 42px; padding: 8px 5px; font-size: 11px; }
-.roster-column .roster-position.is-locked { display: flex; justify-content: center; min-height: 45px; }
+.roster-column .roster-position.is-locked { display: flex; flex-direction: column; justify-content: center; min-height: 45px; }
+.roster-calendar .roster-column button.roster-open { width: 100%; min-height: 44px; background: #147da4; border-color: #147da4; color: #fff; }
+.roster-calendar .roster-column button.roster-open:hover { background: #106686; border-color: #106686; }
 .roster-column .roster-position.is-vacant>strong { font-size: 13px; }
 html[data-theme="dark"] .roster-column .roster-shift-day .roster-shift-heading h5 { color: #f5d08a; }
 html[data-theme="dark"] .roster-column .roster-shift-night .roster-shift-heading h5 { color: #b4caff; }

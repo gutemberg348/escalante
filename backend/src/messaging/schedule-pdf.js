@@ -59,8 +59,6 @@ export function buildSchedulePdf({ competency, slots }) {
     const tableWidth = document.page.width - 40;
     const columnWidths = [27, 31, 74, 106, 106, 105.5, 105.5];
     const columnTitles = ['Dia', 'Sem.', 'Período', '1ª posição', '2ª posição', '3ª coluna', '4ª coluna'];
-    const releases = new Map(db.prepare(`SELECT service_date,third_column_open,fourth_column_open
-      FROM schedule_pdf_column_releases WHERE competency_id=?`).all(competency.id).map((row) => [row.service_date, row]));
     const assignmentCells = assignmentCellsBySlot(competency.id);
     const updatedAt = dayjs().format('DD/MM/YYYY [às] HH:mm');
 
@@ -91,9 +89,6 @@ export function buildSchedulePdf({ competency, slots }) {
 
     for (const [dayIndex, day] of rowsByDate.entries()) {
       const date = dayjs(day.serviceDate);
-      const release = releases.get(day.serviceDate);
-      const openFourth = Boolean(release?.fourth_column_open);
-      const openThird = Boolean(release?.third_column_open || openFourth);
       const special = day.slots.some((slot) => Boolean(slot.is_majorado)) || [0, 5, 6].includes(date.day());
       // Mantém os dois turnos do mesmo dia como uma faixa visual única.
       const dayFill = dayIndex % 2 === 0 ? '#ffffff' : '#e2eff5';
@@ -108,6 +103,8 @@ export function buildSchedulePdf({ competency, slots }) {
 
       for (let periodIndex = 0; periodIndex < day.slots.length; periodIndex += 1) {
         const slot = day.slots[periodIndex];
+        const openFourth = Number(slot.current_capacity) >= 4;
+        const openThird = Number(slot.current_capacity) >= 3;
         const { names = [], types: memberTypes = [] } = assignmentCells.get(slot.id) ?? {};
         const values = [
           slot.period === 'DIURNO' ? '07h00 às 19h00' : '19h00 às 07h00',
