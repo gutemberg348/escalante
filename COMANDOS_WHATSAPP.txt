@@ -19,6 +19,8 @@ FORMAS DE CHAMAR O BOT
 4. Respondendo à mensagem de um militar e marcando o bot:
    @Escalante dia 20 noite
    Nesse caso, o pedido será feito para o autor da mensagem respondida.
+   Para retirar serviço, sem outro militar informado, retira de quem enviou
+   o comando, mesmo respondendo à mensagem de outra pessoa.
 
 5. Marcando o bot e o militar:
    @Escalante marque @Militar dia 20 noite
@@ -204,6 +206,11 @@ Somente "12h" não define o turno; escreva dia ou noite.
    @Escalante cancelar @Militar dia 19 dia
    @Escalante desmarcar 12 horas noite do dia de amanhã
    @Escalante retirar Sgt Pedro Neto dia 19 noite
+   @Escalante retirar o serviço do dia 19
+   @Escalante retirar meu serviço dia 19 noite
+   @Escalante retirar o meu serviço do dia 19
+   @Escalante retirar eu dia 19
+   /retirar dia 19
 
 Palavras aceitas:
    retirar, retira, retire
@@ -218,7 +225,9 @@ O bot tolera erro de uma letra nesses verbos.
 Sem informar o turno, remove todos os serviços extras do militar naquele dia.
 Serviço ordinário não é removido por esse comando.
 Desmarcar, cancelar e retirar têm o mesmo efeito: removem o serviço extra.
-Sem outro militar informado, o pedido é para quem enviou a mensagem. Pode
+Sem outro militar informado, o pedido é para quem enviou a mensagem, mesmo
+ao responder a outro participante. "Meu serviço", "o serviço", "eu" e "mim"
+também identificam quem enviou; não precisa marcar seu próprio contato. Pode
 responder a uma mensagem do bot com "desmarcar 12 horas noite do dia de amanhã".
 O comando /cancelar 125 continua retirando pelo código do horário.
 

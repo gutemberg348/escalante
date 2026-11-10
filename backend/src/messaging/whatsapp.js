@@ -15,7 +15,7 @@ import { regenerateOrdinaryAssignments, previewMonthGeneration } from '../schedu
 export { parseNaturalChoices } from './marking-choices.js';
 
 const authDirectory = path.resolve(path.dirname(env.DATABASE_PATH), 'whatsapp-auth');
-const commandHandlerVersion = 'mentions-v15-natural-removal-month-feedback';
+const commandHandlerVersion = 'mentions-v16-self-service-removal';
 const commandMonthContext = new AsyncLocalStorage();
 const connection = {
   socket: null, saveCreds: null, status: 'DISCONNECTED', qrDataUrl: null, qrIssued: false,
@@ -454,11 +454,18 @@ function writtenServiceTarget(text, explicitTarget, sender) {
   const action = delegatedRemovalAction(text) ?? text.match(delegatedMarkingPattern);
   if (!action || action.index !== 0) return { member: sender };
   const rest = text.slice(action[0].length).trim();
-  const dateStart = rest.search(/\b(?:DIAS?\s+(?=\d)|HOJE|HOJ|HJ|AMANHA|\d)/);
+  const dateStart = rest.search(/\b(?:DIAS?\s+(?=\d)|HOJE|HOJ|HJ|AMANHA|NOITE|DIURNO|NOTURNO|\d)/);
   if (dateStart < 0) return { member: sender };
   const name = rest.slice(0, dateStart).replace(/\b(?:DO|NO|DE|PARA)\s*$/, '').trim();
   if (!name || /^(?:EU|MIM|PARA MIM|ME|MEU|MINHA|O|A)$/.test(name)) return { member: sender };
-  const member = memberByWrittenName(name);
+  // "O serviço" and "meu serviço" describe the sender's booking, not a
+  // member name. Keep this vocabulary closed so unknown names still fail.
+  const serviceNoun = '(?:SERVICOS?|EXTRAS?|MARCACAO|MARCACOES|VAGAS?|HORARIOS?)';
+  const selfService = new RegExp(`^(?:(?:O|A|OS|AS)\\s+)?(?:(?:MEU|MEUS|MINHA|MINHAS)\\s+)?${serviceNoun}$`);
+  if (delegatedRemovalAction(text) && selfService.test(name)) return { member: sender };
+  const writtenName = delegatedRemovalAction(text)
+    ? name.replace(new RegExp(`^(?:(?:O|A|OS|AS)\\s+)?${serviceNoun}\\s+(?:DO|DA|DE)\\s+`), '') : name;
+  const member = memberByWrittenName(writtenName);
   return member ? { member } : { error: 'Não identifiquei um único militar com esse nome. Use o nome cadastrado completo ou marque o contato com @. Nenhuma alteração foi feita.' };
 }
 
@@ -887,9 +894,10 @@ export async function handleIncomingMessages(socket, { messages }) {
     const hasDirectMarkingRequest = directChoices.length > 0 || Boolean(directSelection.error)
       || isDelegatedMarkingText(directText) || isDelegatedRemovalText(directText) || isAssignmentChangeText(directText)
       || Boolean(memberStatusRequest);
-    // Ao responder a mensagem de um militar, um pedido novo sem outro @militar
-    // usa o autor citado como alvo. Um @militar explícito continua prioritário.
-    const quotedTargetIdentity = !undoRequest && !directTarget.required && hasDirectMarkingRequest && quotedCandidate
+    // A removal without an explicit member belongs to the sender, including
+    // replies: nobody needs to mention their own contact. Other command types
+    // retain delegation to the quoted author; explicit targets take priority.
+    const quotedTargetIdentity = !undoRequest && !isDelegatedRemovalText(directText) && !directTarget.required && hasDirectMarkingRequest && quotedCandidate
       ? await resolveMemberIdentityWithMapping(socket, quotedCandidate.key)
       : null;
     // A new command takes precedence over a quoted message. Quoting a request
@@ -1105,6 +1113,8 @@ Para retirar somente serviços extras:
    *@Escalante excluir @militar do dia 19, 24h*
 Aceita desmarcar, cancelar, retirar, tirar, excluir, remover ou apagar e tolera erro de uma letra nesses verbos.
 Exemplo para si: desmarcar 12 horas noite do dia de amanhã.
+Também aceita: retirar o serviço do dia 19, retirar meu serviço dia 19 ou retirar eu dia 19.
+Sem outro militar informado, retira de quem enviou, inclusive ao responder a outra pessoa. Não precisa marcar seu próprio contato.
 Também aceita lançar com nome escrito: lançar o Sgt Duarte dia 12, 24h.
 Cancelar pelo código continua funcionando: /cancelar 125.
 Quando informar apenas o dia, todos os extras desse militar no dia serão retirados.

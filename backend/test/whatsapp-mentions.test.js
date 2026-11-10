@@ -1306,6 +1306,74 @@ for (const verb of ['desmarcar', 'desmarca', 'desmarque', 'cancelar', 'cancela',
   assert.ok(replies.at(-1).text.includes(competency.name));
 });
 
+for (const command of [
+  'retirar o serviço do dia 19', 'retirar meu serviço dia 19', 'retirar o meu serviço do dia 19',
+  'retira meus serviços do dia 19', 'cancelar minha marcação do dia 19', 'desmarcar minhas marcações dia 19',
+  'retirar eu dia 19', 'retirar mim dia 19', 'eu quero retirar o serviço do dia 19',
+  'retirar dia 19', '/retirar o serviço do dia 19', 'desmarcar o extra dia 19'
+]) test(`${command} removes only the actual sender extras without requiring a self mention`, async () => {
+  for (const period of ['DIURNO', 'NOTURNO']) {
+    addConfirmedAssignment({ memberId: 1, day: 19, period, serviceType: 'EXTRAORDINARY' });
+    addConfirmedAssignment({ memberId: 18, day: 19, period, serviceType: 'EXTRAORDINARY' });
+  }
+  addConfirmedAssignment({ memberId: 1, day: 20, period: 'DIURNO', serviceType: 'ORDINARY' });
+  const preserved = db.prepare("SELECT * FROM assignments WHERE member_id<>1 OR service_type='ORDINARY' ORDER BY id").all();
+  await receive(command.startsWith('/') ? command : `@Escalante ${command}`, command.startsWith('/') ? [] : [bot]);
+  assert.deepEqual(db.prepare('SELECT * FROM assignments ORDER BY id').all(), preserved);
+  assert.match(replies.at(-1).text, /RETIRADA PARA SGT REMETENTE/);
+  assert.ok(replies.at(-1).text.includes(competency.name));
+});
+
+test('self removal replying to another member never targets the quoted author', async () => {
+  for (const memberId of [1, 18]) addConfirmedAssignment({ memberId, day: 19, serviceType: 'EXTRAORDINARY' });
+  const preserved = db.prepare('SELECT * FROM assignments WHERE member_id=18').all();
+  await receive('@Escalante retirar meu serviço dia 19 noite', [bot], { participant: alex, quotedMessage: { conversation: 'Meu extra do dia 19' } });
+  assert.deepEqual(db.prepare('SELECT * FROM assignments').all(), preserved);
+  assert.match(replies.at(-1).text, /RETIRADA PARA SGT REMETENTE/);
+});
+
+test('removal with no name replying to the bot and a period before the date uses the sender', async () => {
+  for (const period of ['DIURNO', 'NOTURNO']) addConfirmedAssignment({ memberId: 1, day: 19, period, serviceType: 'EXTRAORDINARY' });
+  await receive('retirar meu serviço noite do dia 19', [], { participant: bot, quotedMessage: { conversation: 'Como retirar?' } });
+  assert.deepEqual(bookedDates(), [{ member_id: 1, service_date: `${futureYear}-09-19`, period: 'DIURNO' }]);
+});
+
+for (const target of ['o serviço de Alex', '@Alex']) test(`an explicit removal target ${target} still takes priority over the sender and quoted author`, async () => {
+  for (const memberId of [1, 18]) addConfirmedAssignment({ memberId, day: 19, serviceType: 'EXTRAORDINARY' });
+  const preserved = db.prepare('SELECT * FROM assignments WHERE member_id=1').all();
+  await receive(`@Escalante retirar ${target} dia 19 noite`, target.startsWith('@') ? [bot, alex] : [bot], { participant: other, quotedMessage: { conversation: 'teste' } });
+  assert.deepEqual(db.prepare('SELECT * FROM assignments').all(), preserved);
+  assert.match(replies.at(-1).text, /RETIRADA PARA SGT ALEX/);
+});
+
+test('an unknown service owner never falls back to deleting the sender booking', async () => {
+  addConfirmedAssignment({ memberId: 1, day: 19, serviceType: 'EXTRAORDINARY' });
+  const before = db.prepare('SELECT * FROM assignments').all();
+  await receive('@Escalante retirar o serviço do Desconhecido dia 19', [bot]);
+  assert.deepEqual(db.prepare('SELECT * FROM assignments').all(), before);
+  assert.match(replies.at(-1).text, /Não identifiquei/);
+});
+
+test('self removal honors an explicit month without changing the selected month', async () => {
+  const target = generatedMonth(futureYear, 11);
+  await receive(`@Escalante marcar dia 19 noite mês 11/${futureYear}`, [bot]);
+  addConfirmedAssignment({ memberId: 1, day: 19, serviceType: 'EXTRAORDINARY' });
+  const preserved = db.prepare('SELECT * FROM assignments WHERE service_slot_id IN (SELECT id FROM service_slots WHERE competency_id=?)').all(competency.id);
+  await receive(`@Escalante retirar meu serviço dia 19 noite mês 11/${futureYear}`, [bot]);
+  assert.deepEqual(db.prepare('SELECT * FROM assignments').all(), preserved);
+  assert.ok(replies.at(-1).text.includes(target.name));
+  assert.equal(activeCompetency().id, competency.id);
+});
+
+test('self removal resolves the sender LID without requiring their own mention', async () => {
+  for (const memberId of [1, 18]) addConfirmedAssignment({ memberId, day: 19, serviceType: 'EXTRAORDINARY' });
+  const preserved = db.prepare('SELECT * FROM assignments WHERE member_id=1').all();
+  await handleIncomingMessages(socket, { messages: [{ key: { id: `in-${++sequence}`, remoteJid: group, participant: lid, fromMe: false },
+    message: { extendedTextMessage: { text: '@Escalante retirar o meu serviço do dia 19', contextInfo: { mentionedJid: [bot] } } } }] });
+  assert.deepEqual(db.prepare('SELECT * FROM assignments').all(), preserved);
+  assert.match(replies.at(-1).text, /RETIRADA PARA SGT ALEX/);
+});
+
 test('desmarcar 12 horas noite do dia de amanha works when replying to the bot', async () => {
   const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1);
   const current = generatedMonth(tomorrow.getFullYear(), tomorrow.getMonth() + 1);
