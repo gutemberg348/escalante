@@ -439,11 +439,20 @@ Os serviços extras já marcados são sempre mantidos. Não existe confirmação
 retirar extras ao colocar de férias. O bot atualiza a situação, mantém os extras
 exatamente nas posições em que estavam e envia o PDF atualizado.
 
-Essa mesma regra é aplicada ao trocar a situação pela página Efetivo: somente os
-ordinários são removidos, as vagas ficam abertas e os extras permanecem na mesma
-posição. Ao voltar ao status Ativo, a
-escala selecionada é regerada para recalcular os serviços ordinários; os serviços
-extras continuam preservados.
+Na página Efetivo, ao mudar a situação para Férias ou Ativo, o padrão é preservar
+as escalas já geradas. O cadastro muda imediatamente e a nova situação será
+considerada nas próximas gerações ou regenerações. Não precisa gerar o mês
+seguinte antes de colocar o militar de férias.
+
+Exemplo: para férias em dezembro sem retirar serviços de novembro, selecione
+Férias e deixe desmarcado "Aplicar também à escala de Novembro de 2026".
+Depois gere dezembro: o militar ficará fora dos ordinários enquanto estiver de
+férias, mantendo a possibilidade de marcar extras.
+
+Se marcar "Aplicar também à escala de [mês]", Férias retira os ordinários desse
+mês, deixando as vagas abertas, e Ativo recalcula os ordinários. Extras ficam
+preservados em ambos os casos. A escolha também aparece no formulário Editar.
+Os comandos de situação pelo WhatsApp continuam aplicando à escala selecionada.
 
 
 2. MESES E PDF

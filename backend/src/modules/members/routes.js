@@ -19,7 +19,8 @@ const memberSchema = z.object({
   ordinary_eligible: z.boolean().optional(), notes: z.string().optional().nullable()
 });
 const memberPatchSchema = memberSchema.partial().extend({
-  competency_id: z.coerce.number().int().positive().optional().nullable()
+  competency_id: z.coerce.number().int().positive().optional().nullable(),
+  apply_to_selected_schedule: z.boolean().optional().default(true)
 });
 const base = `SELECT m.*, w.name AS wing_name FROM members m LEFT JOIN wings w ON w.id=m.default_wing_id`;
 
@@ -129,7 +130,7 @@ router.post('/', allow('ADMIN','SCHEDULER'), async (req, res, next) => {
 router.patch('/:id', allow('ADMIN','SCHEDULER'), async (req, res, next) => {
   try {
     const parsed = memberPatchSchema.parse(req.body);
-    const { competency_id: competencyId = null, ...input } = parsed;
+    const { competency_id: competencyId = null, apply_to_selected_schedule: applyToSelectedSchedule, ...input } = parsed;
     const old = db.prepare('SELECT * FROM members WHERE id=?').get(req.params.id);
     if (!old) return res.status(404).json({ message: 'Militar não encontrado.' });
     const competency = competencyId
@@ -161,7 +162,7 @@ router.patch('/:id', allow('ADMIN','SCHEDULER'), async (req, res, next) => {
       updated_at: now()
     };
     let statusEffect = null;
-    if (competency && old.operational_status !== 'VACATION' && merged.operational_status === 'VACATION') {
+    if (applyToSelectedSchedule && competency && old.operational_status !== 'VACATION' && merged.operational_status === 'VACATION') {
       statusEffect = applyVacationToCompetency({
         memberId: old.id,
         competencyId: competency.id,
@@ -175,7 +176,7 @@ router.patch('/:id', allow('ADMIN','SCHEDULER'), async (req, res, next) => {
       synchronizeWhatsAppIdentities(merged.id, merged.phone_number, merged.whatsapp_jid);
     })();
     await discoverMemberWhatsAppJid(merged.id).catch(() => null);
-    if (competency && old.operational_status !== 'ACTIVE' && merged.operational_status === 'ACTIVE') {
+    if (applyToSelectedSchedule && competency && old.operational_status !== 'ACTIVE' && merged.operational_status === 'ACTIVE') {
       statusEffect = {
         type: 'REGENERATED_ON_REACTIVATION',
         generation: regenerateOrdinaryAssignments({
@@ -185,8 +186,8 @@ router.patch('/:id', allow('ADMIN','SCHEDULER'), async (req, res, next) => {
         })
       };
     }
-    const item = db.prepare('SELECT * FROM members WHERE id=?').get(req.params.id); audit({ userId:req.user.id, action:'UPDATE', entityType:'MEMBER', entityId:item.id, before:old, after:{ ...item, statusEffect }, req });
-    res.json({ item, statusEffect, competency: competency ? { id: competency.id, name: competency.name } : null });
+    const item = db.prepare('SELECT * FROM members WHERE id=?').get(req.params.id); audit({ userId:req.user.id, action:'UPDATE', entityType:'MEMBER', entityId:item.id, before:old, after:{ ...item, statusEffect, applyToSelectedSchedule }, req });
+    res.json({ item, statusEffect, schedulePreserved: !applyToSelectedSchedule, competency: competency ? { id: competency.id, name: competency.name } : null });
   } catch (error) { next(error); }
 });
 router.delete('/:id', allow('ADMIN','SCHEDULER'), (req, res, next) => {

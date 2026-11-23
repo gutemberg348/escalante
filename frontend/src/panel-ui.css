@@ -334,6 +334,12 @@ html[data-theme="dark"] .roster-column .roster-shift-night .roster-shift-heading
 @media (min-width: 370px) and (max-width: 680px) { .roster-column .roster-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .roster-observation { grid-column: 1/-1; }
 .schedule-change-notice { display: grid; gap: 7px; margin: 14px 0; padding: 14px; border: 1px solid #e4c984; border-left: 4px solid #c79520; border-radius: 9px; background: #fff8e8; color: #64460c; }
+.status-schedule-choice { min-width: 0; }
+.status-schedule-choice .schedule-change-notice p { margin: 0; }
+.status-schedule-choice label.status-schedule-option { display: flex; align-items: flex-start; gap: 10px; padding: 13px; margin: 12px 0; border: 1px solid var(--ui-border); border-radius: 9px; background: var(--ui-soft); color: var(--ui-text); font-size: 13px; line-height: 1.5; }
+.status-schedule-option input[type="checkbox"] { width: 20px; height: 20px; min-width: 20px; flex: 0 0 20px; margin: 2px 0 0; accent-color: #147da4; }
+.status-schedule-option span { min-width: 0; overflow-wrap: anywhere; }
+.status-schedule-option small { display: block; margin-top: 4px; color: var(--ui-muted); font-weight: 400; }
 .schedule-change-notice>span { font-size: 10px; font-weight: 800; letter-spacing: .6px; }
 .schedule-change-notice>strong { font-size: 15px; line-height: 1.5; }
 .schedule-change-notice>p { margin: 0; font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }

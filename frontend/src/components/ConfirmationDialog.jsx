@@ -15,7 +15,7 @@ export default function ConfirmationDialog({ title, children, error, pending, co
     const handleKey = (event) => {
       if (event.key === 'Escape' && !actions.current.pending) { event.preventDefault(); actions.current.onClose(); }
       if (event.key !== 'Tab') return;
-      const focusable = [...(dialog.current?.querySelectorAll('button:not([disabled]),a[href]') || [])];
+      const focusable = [...(dialog.current?.querySelectorAll('button:not([disabled]),a[href],input:not([disabled]),select:not([disabled]),textarea:not([disabled])') || [])];
       const first = focusable[0];
       const last = focusable.at(-1);
       if (!first) { event.preventDefault(); dialog.current?.focus(); }

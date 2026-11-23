@@ -82,6 +82,8 @@ Remanejamentos temporários ficam registrados com suas datas. Regerar o mês res
 
 ## Atualização na VPS
 
+Na página Efetivo, a mudança para Férias ou Ativo permite preservar as escalas já geradas (padrão) ou aplicar também à competência selecionada. O cadastro muda imediatamente; com as escalas preservadas, a nova situação só altera os ordinários quando uma escala for gerada ou regerada. Assim, é possível colocar um militar de férias antes de gerar dezembro, mantendo novembro intacto. A opção existe na confirmação do seletor de situação e no formulário Editar. Os extras continuam preservados. Não há migração nem atualização automática de serviços ao publicar essa melhoria.
+
 Depois de enviar ou puxar todos os arquivos, na raiz do projeto:
 
 ```bash
