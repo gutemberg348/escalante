@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client.js';
+import ConfirmationDialog from '../components/ConfirmationDialog.jsx';
+import ScheduleChangeNotice from '../components/ScheduleChangeNotice.jsx';
 
 const parts = (value) => {
   if (!value) return { date: '', time: '' };
@@ -40,6 +42,10 @@ const schedulePayload = (items, schedule) => items.map((item) => ({ memberId: it
 
 export default function Seniority() {
   const queryClient = useQueryClient();
+  const [competencyId, setCompetencyId] = useState('');
+  const [startTarget, setStartTarget] = useState(null);
+  const { data: competencies = [] } = useQuery({ queryKey: ['competencies'], queryFn: () => api.get('/competencies').then((response) => response.data.items) });
+  const generatedCompetencies = competencies.filter((item) => item.generated_at && item.status !== 'HOMOLOGATED');
   const { data = { items: [], turn: null, markingMode: 'OPEN', markingScheduled: false, markingStartsAt: null, activeMarkingColumn: 2 } } = useQuery({
     queryKey: ['seniority'],
     queryFn: () => api.get('/seniority').then((response) => response.data),
@@ -48,22 +54,31 @@ export default function Seniority() {
   const [items, setItems] = useState([]);
   const [schedule, setSchedule] = useState({});
   const [resetFromMemberId, setResetFromMemberId] = useState(null);
+  const selectedCompetency = competencies.find((item) => String(item.id) === competencyId);
+  useEffect(() => {
+    if (data.turn && data.markingCompetency) { setCompetencyId(String(data.markingCompetency.id)); return; }
+    if (!generatedCompetencies.length || generatedCompetencies.some((item) => String(item.id) === competencyId)) return;
+    const today = new Date();
+    const current = generatedCompetencies.find((item) => item.year === today.getFullYear() && item.month === today.getMonth() + 1);
+    const selected = generatedCompetencies.find((item) => item.id === data.markingCompetency?.id) || current || generatedCompetencies[0];
+    setCompetencyId(String(selected.id));
+  }, [competencies, competencyId, data.turn, data.markingCompetency]);
   useEffect(() => {
     setItems(data.items);
     setSchedule(Object.fromEntries(data.items.map((item) => [item.id, parts(item.marking_deadline)])));
   }, [data]);
 
-  const refresh = () => queryClient.invalidateQueries({ queryKey: ['seniority'] });
+  const refresh = () => Promise.all(['seniority', 'whatsapp'].map((key) => queryClient.invalidateQueries({ queryKey: [key] })));
   const moveOrder = useMutation({
     mutationFn: ({ nextItems, nextSchedule }) => api.put('/seniority', { memberIds: nextItems.map((item) => item.id), reason: 'Ajuste rápido de antiguidade pelo painel', deadlines: schedulePayload(nextItems, nextSchedule) }),
     onSuccess: (response) => queryClient.setQueryData(['seniority'], response.data),
     onError: () => { setItems(data.items); setSchedule(Object.fromEntries(data.items.map((item) => [item.id, parts(item.marking_deadline)]))); }
   });
   const saveSchedule = useMutation({ mutationFn: () => api.put('/seniority/deadlines', { items: schedulePayload(items, schedule) }), onSuccess: refresh });
-  const start = useMutation({ mutationFn: () => api.post('/seniority/turn/start'), onSuccess: refresh });
+  const start = useMutation({ mutationFn: (target) => api.post('/seniority/turn/start', { competencyId: target.id }), onSuccess: () => { setStartTarget(null); return refresh(); } });
   const notify = useMutation({ mutationFn: () => api.post('/seniority/turn/notify') });
   const close = useMutation({ mutationFn: () => api.delete('/seniority/turn'), onSuccess: refresh });
-  const reset = useMutation({ mutationFn: (startMemberId) => api.post('/seniority/turn/reset', { startMemberId }), onSuccess: refresh });
+  const reset = useMutation({ mutationFn: (startMemberId) => api.post('/seniority/turn/reset', { startMemberId, competencyId: Number(competencyId) }), onSuccess: refresh });
   const move = (index, direction) => {
     const target = index + direction;
     if (target < 0 || target >= items.length || moveOrder.isPending) return;
@@ -85,16 +100,23 @@ export default function Seniority() {
   const resetFrom = resetFromMemberId ? items.find((member) => member.id === resetFromMemberId) : null;
   const resetTurn = () => {
     const target = resetFrom ? `a partir de ${resetFrom.rank} ${resetFrom.operational_name}` : 'pelo primeiro prazo ainda válido';
-    if (window.confirm(`Reiniciar a fila ${target}? Prazos vencidos serão ignorados e as marcações já feitas não serão apagadas.`)) reset.mutate(resetFromMemberId);
+    if (window.confirm(`Escala de ${selectedCompetency?.name}: reiniciar a fila ${target}? Prazos vencidos serão ignorados e as marcações já feitas não serão apagadas.`)) reset.mutate(resetFromMemberId);
   };
   const scheduleIssues = validateSchedule(items, schedule);
   const error = moveOrder.error || saveSchedule.error || start.error || notify.error || close.error || reset.error;
   const scheduled = Boolean(data.turn && data.markingScheduled);
   const columnLabel = `${data.activeMarkingColumn || 2}ª coluna`;
+  const scheduleDirty = items.some((item) => deadline(schedule[item.id]) !== deadline(parts(data.items.find((saved) => saved.id === item.id)?.marking_deadline)));
+  const busy = start.isPending || reset.isPending || close.isPending || saveSchedule.isPending || moveOrder.isPending;
 
   return <>
     <header className="page-header"><div><span className="eyebrow">ORDEM E PRAZOS</span><h1>Antiguidade</h1><p>Defina até qual data e hora cada militar pode marcar, na ordem de antiguidade.</p></div><span className="order-counter">{items.length} militares</span></header>
     <section className={`panel marking-sequence-card ${data.turn ? scheduled ? 'scheduled-marking-mode' : '' : 'open-marking-mode'}`}>
+      <div className="seniority-month-control"><label>Mês da fila<select value={competencyId} disabled={busy || Boolean(data.turn || startTarget)} onChange={(event) => { start.reset(); reset.reset(); setCompetencyId(event.target.value); }}>
+        <option value="">Selecione uma escala gerada</option>{generatedCompetencies.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+      </select></label><p>{data.turn ? `Fila de ${data.markingCompetency?.name || 'mês selecionado'} · ${columnLabel}. Encerre esta fila antes de escolher outro mês.` : `O início envia o cronograma e seleciona esse mês no WhatsApp para as marcações. Os prazos salvos abaixo serão mantidos · ${columnLabel}.`}</p>
+      {!generatedCompetencies.length && <p>Gere a escala desejada em Gestão do mês antes de iniciar a fila.</p>}
+      {scheduleDirty && <p className="error">Salve as datas e horas abaixo antes de iniciar ou reiniciar.</p>}</div>
       <div className="sequence-copy">
         <span className="eyebrow">{scheduled ? 'FILA PROGRAMADA' : data.turn ? 'VEZ ATUAL' : 'MODO DE MARCAÇÃO'}</span>
         <h2>{scheduled ? `Começa em ${formatDateTime(data.markingStartsAt)}` : data.turn ? `${data.turn.rank} ${data.turn.operational_name}` : 'Marcação livre'}</h2>
@@ -105,9 +127,15 @@ export default function Seniority() {
             : 'A fila está encerrada. Qualquer militar ativo e autorizado pode marcar as vagas disponíveis, sem ordem de antiguidade.'}</p>
         {scheduled && <><div className="sequence-details"><span><b>Início</b>{formatDateTime(data.markingStartsAt)}</span><span><b>Coluna</b>{columnLabel}</span><span><b>Primeiro prazo</b>{formatDateTime(data.turn.deadline_at)}</span></div><small className="sequence-rule-note">A rodada vale somente para essa data e coluna. Depois do último militar, a marcação fica livre.</small></>}
       </div>
-      <div className="connection-actions">{data.turn ? <><button type="button" className="secondary-button" onClick={() => notify.mutate()} disabled={scheduled || notify.isPending}>{scheduled ? 'Aguardando início' : 'Enviar vagas agora'}</button><button type="button" className="secondary-button" onClick={() => close.mutate()} disabled={close.isPending}>Encerrar e liberar para todos</button></> : <button type="button" onClick={() => start.mutate()} disabled={start.isPending}>Iniciar pelo horário atual</button>}<button type="button" className="secondary-button reset-turn-button" onClick={resetTurn} disabled={reset.isPending}>↺ Reiniciar fila</button></div>
+      <div className="connection-actions">{data.turn ? <><button type="button" className="secondary-button" onClick={() => notify.mutate()} disabled={scheduled || notify.isPending}>{scheduled ? 'Aguardando início' : 'Enviar vagas agora'}</button><button type="button" className="secondary-button" onClick={() => close.mutate()} disabled={busy}>Encerrar e liberar para todos</button></> : <button type="button" onClick={() => { start.reset(); setStartTarget({ id: selectedCompetency.id, name: selectedCompetency.name }); }} disabled={busy || !selectedCompetency || scheduleDirty || scheduleIssues.size > 0}>Iniciar fila do mês</button>}<button type="button" className="secondary-button reset-turn-button" onClick={resetTurn} disabled={busy || !selectedCompetency || scheduleDirty || scheduleIssues.size > 0}>↺ Reiniciar fila</button></div>
       {error && <p className="error sequence-error">{error.response?.data?.message || 'Não foi possível atualizar a sequência.'}</p>}{start.isSuccess && <p className="success sequence-error">{start.data?.data?.message || 'Fila iniciada pelo primeiro prazo ainda válido.'}</p>}{close.isSuccess && !data.turn && <p className="success sequence-error">Fila encerrada. A marcação está liberada para todos os militares ativos e autorizados.</p>}{reset.isSuccess && <p className="success sequence-error">{reset.data?.data?.message || 'Fila reiniciada pelo primeiro prazo ainda válido.'} As marcações anteriores foram preservadas.</p>}
     </section>
+    {startTarget && <ConfirmationDialog title="Iniciar fila deste mês?" destructive={false} pending={start.isPending} pendingLabel="Iniciando…" confirmLabel="Enviar cronograma e iniciar fila"
+      onClose={() => setStartTarget(null)} onConfirm={() => start.mutate(startTarget)} error={start.error?.response?.data?.message}>
+      <ScheduleChangeNotice month={startTarget.name}><p>{columnLabel}</p></ScheduleChangeNotice>
+      <p>O bot enviará o cronograma salvo e iniciará a fila desse mês. Se a data ainda for futura, o início ficará programado para as 06h.</p>
+      <p>Esse mês ficará selecionado no WhatsApp para as marcações. As datas, horários e serviços já cadastrados serão mantidos.</p>
+    </ConfirmationDialog>}
     <section className="priority-panel" aria-label="Ordem dos militares e prazos">
       <div className="priority-heading"><div><h2>Ordem de marcação</h2><p>Defina o prazo de cada militar. Use as setas para ajustar a ordem.</p></div><span>{items.length} militares</span></div>
       <ol className="priority-list">{items.map((member, index) => {

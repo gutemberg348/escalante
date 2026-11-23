@@ -138,6 +138,38 @@ Somente "12h" não define o turno; escreva dia ou noite.
    @Escalante mostrar cronograma
    Também mostram o cronograma. O erro comum "conrograma" é aceito.
 
+   /iniciar marcação
+   /iniciar marcacao
+   /começar marcação
+   /marcação
+   /marcacao
+   @Escalante iniciar marcação
+   @Escalante começar a marcação
+   @Escalante marcação
+   /iniciar marcação dezembro
+   /iniciar marcação mês 12
+   /marcação 12/2026
+   @Escalante iniciar marcação mês que vem
+   Inicia a chamada pela fila do cronograma já salvo na Antiguidade, usando
+   o mês selecionado no WhatsApp e a coluna do cronograma (2ª por padrão).
+   Para iniciar outro mês, informe o nome, número, mês/ano ou "mês que vem"
+   depois do comando. Exemplo: "iniciar marcação dezembro". "Dezebro" também
+   é aceito. O mês precisa já estar gerado. Ao iniciar, esse mês fica
+   selecionado no WhatsApp para as marcações, e o cronograma dele é enviado.
+   Não precisa repetir a data e a coluna nesses comandos curtos.
+   Mantém as datas e horários cadastrados. Se o início for futuro, programa
+   para as 06h daquela data; se já estiver no horário, chama o primeiro militar
+   cujo prazo ainda não venceu. Depois, a fila segue o cronograma.
+   Os prazos precisam estar em ordem crescente, após as 06h e no mesmo dia.
+   Se todos venceram ou o cronograma estiver inválido, o bot pede para ajustar
+   a Antiguidade. Uma fila já aberta ou programada não é reiniciada por esses
+   atalhos. Só administradores configurados no painel WhatsApp podem iniciar.
+
+   No painel Antiguidade, use "Mês da fila", escolha a escala gerada e clique
+   em "Iniciar fila do mês". Confira o mês no aviso e confirme o envio do
+   cronograma. Só escolher no campo não muda o mês do WhatsApp; a seleção
+   passa a valer quando a fila for iniciada. Salve os prazos antes de iniciar.
+
    /iniciar cronograma dia 25/09/2026 2ª coluna
    /começar cronograma dia 25/09/2026 2ª coluna
    @Escalante iniciar cronograma dia 25/09/2026 2ª coluna

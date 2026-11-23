@@ -66,6 +66,10 @@ body { background: var(--ui-bg); color: var(--ui-text); }
 
 /* Antiguidade uses its own responsive grid instead of the legacy table rules. */
 .priority-panel { min-width: 0; border: 1px solid var(--ui-border); border-radius: 16px; background: var(--ui-surface); }
+.seniority-month-control { grid-column: 1/-1; width: 100%; min-width: 0; padding-bottom: 16px; border-bottom: 1px solid var(--ui-border); margin-bottom: 10px; }
+.seniority-month-control label { display: grid; gap: 8px; max-width: 420px; min-width: 0; color: var(--ui-text); }
+.seniority-month-control select { width: 100%; min-width: 0; min-height: 44px; }
+.seniority-month-control p { margin: 10px 0 0; font-size: 12px; line-height: 1.6; color: var(--ui-muted); }
 .priority-heading { display: flex; justify-content: space-between; align-items: center; gap: 14px; padding: 22px; border-bottom: 1px solid var(--ui-border); }
 .priority-heading h2 { margin: 0; font-size: 19px; color: var(--ui-text); }
 .priority-heading p { margin: 6px 0 0; font-size: 13px; color: var(--ui-muted); line-height: 1.6; }

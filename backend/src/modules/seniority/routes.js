@@ -2,9 +2,9 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { db, audit, now } from '../../database/index.js';
 import { allow } from '../../middlewares/auth.js';
-import { notifyCurrentMarkingTurn } from '../../messaging/whatsapp.js';
+import { notifyCurrentMarkingTurn, setActiveWhatsAppCompetency } from '../../messaging/whatsapp.js';
+import { startColumnMarkingRound } from '../../messaging/automation.js';
 
-const router = Router();
 const readSetting = (key) => db.prepare('SELECT value FROM system_settings WHERE key=?').get(key)?.value ?? '';
 const writeSetting = (key, value, userId = null) => db.prepare(`INSERT INTO system_settings (key,value,updated_by,updated_at) VALUES (?,?,?,?)
   ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_by=excluded.updated_by,updated_at=excluded.updated_at`).run(key, String(value), userId, now());
@@ -32,6 +32,7 @@ function seniorityPayload() {
     markingMode: turn ? markingScheduled ? 'SCHEDULED' : 'SENIORITY' : 'OPEN',
     markingScheduled,
     markingStartsAt,
+    markingCompetency: db.prepare('SELECT id,name,year,month FROM competencies WHERE id=? AND generated_at IS NOT NULL').get(Number(readSetting('bot_active_competency_id'))) ?? null,
     activeMarkingColumn: Number(readSetting('bot_active_marking_column') || 2)
   };
 }
@@ -93,6 +94,9 @@ function saveDeadlineValues(rankedIds, values, userId, stamp) {
   const remove = db.prepare('DELETE FROM marking_deadlines WHERE member_id=?');
   rankedIds.forEach((id) => values.get(id) ? save.run(id, values.get(id), userId, stamp) : remove.run(id));
 }
+
+export function createSeniorityRouter({ startRound = startColumnMarkingRound } = {}) {
+const router = Router();
 
 router.get('/', (req, res) => {
   res.json(seniorityPayload());
@@ -159,6 +163,19 @@ router.put('/deadlines', allow('ADMIN'), (req, res, next) => {
 
 router.post('/turn/start', allow('ADMIN'), async (req, res, next) => {
   try {
+    const { competencyId } = z.object({ competencyId: z.number().int().positive().optional() }).strict().parse(req.body ?? {});
+    if (competencyId) {
+      const competency = db.prepare('SELECT id,name FROM competencies WHERE id=? AND generated_at IS NOT NULL').get(competencyId);
+      if (!competency) return res.status(404).json({ message: 'Escolha uma escala já gerada. O mês informado não foi encontrado.' });
+      const result = await startRound({ competencyId, column: Number(readSetting('bot_active_marking_column') || 2),
+        userId: req.user.id, useSavedSchedule: true, reason: 'PANEL_SAVED_SCHEDULE_START' });
+      if (!result.started) return res.status(409).json({ message: result.reason });
+      const payload = seniorityPayload();
+      audit({ userId: req.user.id, action: 'START_MARKING_TURN', entityType: 'SENIORITY', entityId: String(payload.turn?.id),
+        after: { competencyId, competencyName: competency.name, ...result }, req });
+      return res.status(201).json({ ...payload, ...result, notificationSent: result.reminderSent,
+        message: `${competency.name}: fila ${result.scheduled ? 'programada para ' + formatDeadline(result.startsAt) : 'iniciada'}. Datas e horários mantidos conforme o cronograma. O mês ficou selecionado no WhatsApp.${result.scheduleSent ? ' Cronograma enviado.' : ' Não foi possível enviar o cronograma pelo WhatsApp agora.'}` });
+    }
     if (activeTurn()) return res.status(409).json({ message: 'Já existe uma vez aberta.' });
     const members = eligibleMembers(); if (!members.length) return res.status(400).json({ message: 'Não há militar apto na antiguidade.' });
     const deadlines = new Map(db.prepare('SELECT member_id,deadline_at FROM marking_deadlines').all().map((item) => [item.member_id, item.deadline_at]));
@@ -177,7 +194,13 @@ router.post('/turn/start', allow('ADMIN'), async (req, res, next) => {
 router.post('/turn/notify', allow('ADMIN'), async (req, res, next) => { try { if (!activeTurn()) return res.status(400).json({ message: 'Não existe uma vez aberta.' }); res.json({ notificationSent: await notifyCurrentMarkingTurn() }); } catch (error) { next(error); } });
 router.post('/turn/reset', allow('ADMIN'), async (req, res, next) => {
   try {
-    const { startMemberId } = z.object({ startMemberId: z.number().int().positive().nullable().optional() }).parse(req.body ?? {});
+    const { startMemberId, competencyId } = z.object({ startMemberId: z.number().int().positive().nullable().optional(), competencyId: z.number().int().positive().optional() }).parse(req.body ?? {});
+    const competency = competencyId ? db.prepare("SELECT * FROM competencies WHERE id=? AND generated_at IS NOT NULL AND status<>'HOMOLOGATED'").get(competencyId) : null;
+    if (competencyId && !competency) return res.status(404).json({ message: 'Escolha uma escala já gerada e não homologada.' });
+    const activeCompetencyId = Number(readSetting('bot_active_competency_id'));
+    if (activeTurn() && competencyId && competencyId !== activeCompetencyId) return res.status(409).json({ message: 'A fila aberta pertence a outro mês. Encerre a fila atual antes de iniciar outro mês.' });
+    const column = Number(readSetting('bot_active_marking_column') || 2);
+    if (competency && column > 2 && !db.prepare('SELECT 1 FROM service_slots WHERE competency_id=? AND current_capacity>=? LIMIT 1').get(competency.id, column)) return res.status(409).json({ message: `A ${column}ª coluna ainda não está aberta nesse mês.` });
     const orderedMembers = eligibleMembers();
     if (!orderedMembers.length) return res.status(400).json({ message: 'Não há militar apto na antiguidade.' });
     const requestedStartIndex = startMemberId ? orderedMembers.findIndex((member) => member.id === startMemberId) : 0;
@@ -191,13 +214,15 @@ router.post('/turn/reset', allow('ADMIN'), async (req, res, next) => {
     db.transaction(() => {
       db.prepare('UPDATE marking_turns SET active=0,closed_at=? WHERE active=1').run(stamp);
       db.prepare('INSERT INTO marking_turns (member_id,deadline_at,active,created_by,created_at) VALUES (?,?,1,?,?)').run(first.id, deadlineAt, req.user.id, stamp);
+      if (competency) setActiveWhatsAppCompetency(competency.id, req.user.id);
     })();
     writeSetting('bot_marking_round_starts_at', '', req.user.id);
     const turn = activeTurn();
     audit({ userId: req.user.id, action: 'RESET_MARKING_TURN', entityType: 'SENIORITY', entityId: String(turn.id), after: { memberId: first.id, deadlineAt, ignoredBefore: startIndex }, req });
     let notificationSent = false;
     try { notificationSent = await notifyCurrentMarkingTurn(); } catch (error) { req.log?.warn({ err: error }, 'Sequência reiniciada sem envio ao WhatsApp.'); }
-    res.json({ turn, notificationSent, skippedCount: startIndex - requestedStartIndex, message: startIndex > requestedStartIndex ? `${startIndex - requestedStartIndex} prazo(s) vencido(s) foram ignorados. A fila recomeçou em ${memberName(first)}.` : `A fila recomeçou em ${memberName(first)}.` });
+    const message = startIndex > requestedStartIndex ? `${startIndex - requestedStartIndex} prazo(s) vencido(s) foram ignorados. A fila recomeçou em ${memberName(first)}.` : `A fila recomeçou em ${memberName(first)}.`;
+    res.json({ turn, notificationSent, skippedCount: startIndex - requestedStartIndex, message: competency ? `${competency.name}: ${message}` : message });
   } catch (error) { next(error); }
 });
 router.delete('/turn', allow('ADMIN'), (req, res) => {
@@ -209,4 +234,6 @@ router.delete('/turn', allow('ADMIN'), (req, res) => {
   writeSetting('bot_marking_round_starts_at', '', req.user.id);
   res.json({ turn: null, markingMode: 'OPEN', message: 'Fila encerrada. Qualquer militar ativo e autorizado pode marcar.' });
 });
-export default router;
+return router;
+}
+export default createSeniorityRouter();

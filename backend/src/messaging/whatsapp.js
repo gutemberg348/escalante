@@ -528,8 +528,13 @@ const markingScheduleStopPattern = /\b(?:PARAR|PARE|ENCERRAR|ENCERRE|FINALIZAR|F
 const freeMarkingPattern = /\b(?:(?:LIBERAR|LIBERE|DEIXAR|DEIXE)\s+(?:A\s+)?MARCACAO\s+LIVRE|MARCACAO\s+LIVRE)\b/;
 
 function parseMarkingScheduleCommand(value) {
-  const normalized = normalizeMentionLabel(value);
+  const normalized = normalizeMentionLabel(value).replace(/^\/+\s*/, '');
   if (freeMarkingPattern.test(normalized)) return { action: 'STOP' };
+  const savedStart = normalized.match(/^(?:(?:INICIAR|INICIE|INICIA|COMECAR|COMECA|COMECE|DAR\s+INICIO)\s+(?:A\s+)?)?MARCACAO(?:\s+(.+?))?[.!?]*$/);
+  if (savedStart && !/\b(?:DIA|COLUNA|POSICAO)\b|\d{1,2}\/\d{1,2}\/20\d{2}/.test(savedStart[1] || '')) {
+    return { action: 'START_SAVED', monthSelector: savedStart[1]?.replace(/\bDEZEBRO\b/g, 'DEZEMBRO') || null };
+  }
+  if (/^(?:INICIAR|INICIE|INICIA|COMECAR|COMECA|COMECE|DAR\s+INICIO)\s+(?:A\s+)?MARCACAO\b/.test(normalized)) return { action: 'START' };
   if (!markingScheduleWordPattern.test(normalized) && !/\bFILA\b/.test(normalized)) return null;
   if (markingScheduleStopPattern.test(normalized)) return { action: 'STOP' };
   if (!markingScheduleWordPattern.test(normalized)) return null;
@@ -904,7 +909,7 @@ export async function handleIncomingMessages(socket, { messages }) {
     // and only calling the bot still delegates to the original author.
     const hasDirectRequest = directTarget.required || directChoices.length > 0 || Boolean(directSelection.error)
       || directText.startsWith('/') || isDelegatedMarkingText(directText) || isDelegatedRemovalText(directText)
-      || isAssignmentChangeText(directText) || Boolean(markingSchedulePlan) || Boolean(memberStatusRequest) || undoRequest;
+      || isAssignmentChangeText(directText) || Boolean(markingSchedulePlan) || Boolean(parseMarkingScheduleCommand(directText)) || Boolean(memberStatusRequest) || undoRequest;
     const quotedRequest = hasDirectRequest ? null : quotedCandidate;
     const effectiveBody = quotedRequest?.body ?? body;
     const explicitSlash = effectiveBody.startsWith('/');
@@ -1166,6 +1171,7 @@ Consultas não contam como alteração. Se os mesmos dados já mudaram, o bot bl
 */horas @pessoa* - horas e horários confirmados de um militar
 */cronograma* - mostra a ordem e o horário limite de cada militar
 *@Escalante iniciar cronograma dia 25/09/2026 2ª coluna* - programa a fila (administrador configurado no painel WhatsApp)
+*/iniciar marcação*, */começar marcação* ou */marcação* - chama pela fila do cronograma salvo, preservando datas e horários (administrador configurado no painel)
 */parar cronograma* - encerra a fila e deixa a marcação livre (administrador configurado no painel WhatsApp)
 */escala* - recebe a escala em PDF
 */meses* - mostra os meses gerados e qual está ativo
@@ -1549,6 +1555,20 @@ async function executeCommand(member, rawBody, { explicitSlash = false, targetMe
   }
   if (command === 'STATUS' || /\bMEU STATUS\b/.test(normalized)) return `*${member.rank} ${member.operational_name}*\nSituação: ${operationalLabel[member.operational_status] ?? member.operational_status}\nAutorização: ${authorizationLabel[member.authorization_status] ?? member.authorization_status}`;
   const markingScheduleRequest = parseMarkingScheduleCommand(normalized);
+  if (markingScheduleRequest?.action === 'START_SAVED') {
+    if (!panelAdministrator) return 'Somente administradores configurados no painel WhatsApp podem iniciar a marcação pelo cronograma.';
+    const request = markingScheduleRequest.monthSelector ? resolveRequestedMonth(markingScheduleRequest.monthSelector, true) : null;
+    if (request?.error) return request.error;
+    if (request && (!request.requested || request.text.replace(/[.!?,]/g, '').trim())) return 'Informe um mês válido. Exemplo: */iniciar marcação dezembro*, */iniciar marcação mês 12* ou */iniciar marcação próximo mês*. Nenhuma alteração foi feita.';
+    const competency = request?.competency || activeCompetency();
+    if (!competency) return 'Não há mês ativo para iniciar a marcação.';
+    const { startColumnMarkingRound } = await import('./automation.js');
+    const result = await startColumnMarkingRound({ competencyId: competency.id,
+      column: Number(readSetting('bot_active_marking_column') || 2), useSavedSchedule: true,
+      reason: `WHATSAPP_SAVED_SCHEDULE_START_BY_${member.id}` });
+    if (!result.started) return `Não foi possível iniciar a marcação: ${result.reason}\n*Mês: ${competency.name}*`;
+    return `*${result.scheduled ? 'MARCAÇÃO PROGRAMADA' : 'MARCAÇÃO INICIADA'}*\n*Mês: ${competency.name}*\n${result.column}ª coluna.\nDatas e horários mantidos conforme o cronograma. O mês ficou selecionado no WhatsApp.${!result.scheduleSent ? '\nNão foi possível enviar o cronograma agora; consulte /cronograma.' : ''}${result.scheduled ? `\nInício: ${dayjs(result.startsAt).format('DD/MM/YYYY [às] HH:mm')}.` : '\nA fila começou pelo primeiro militar com prazo ainda aberto.'}`;
+  }
   if (markingScheduleRequest?.action === 'STOP') {
     if (!panelAdministrator) return 'Somente administradores configurados no painel WhatsApp podem encerrar a fila do cronograma.';
     const stamp = now();

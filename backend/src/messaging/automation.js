@@ -91,8 +91,8 @@ function rebaseDeadlinesForRound(userId, deadlineDate = null) {
   return true;
 }
 
-function openPreparedMarkingSequence(competency, administratorId) {
-  const members = eligibleMembers();
+function openPreparedMarkingSequence(competency, administratorId, skipExpired = false) {
+  const members = eligibleMembers().filter((member) => !skipExpired || dayjs(member.deadline_at).isAfter(dayjs()));
   if (!administratorId || !members.length || members.some((member) => !member.deadline_at)) return false;
   for (let index = 1; index < members.length; index += 1) {
     if (new Date(members[index].deadline_at) <= new Date(members[index - 1].deadline_at)) return false;
@@ -108,20 +108,48 @@ function openPreparedMarkingSequence(competency, administratorId) {
   return true;
 }
 
-export async function startColumnMarkingRound({ competencyId, column, userId = null, reason = 'COLUMN_OPEN', rebaseDeadlines = true, startsAt = null, deadlineDate = null }) {
-  if (getWhatsAppStatus().status !== 'CONNECTED') return { started: false, reason: 'WhatsApp desconectado.' };
+export async function startColumnMarkingRound({ competencyId, column, userId = null, reason = 'COLUMN_OPEN', rebaseDeadlines = true, startsAt = null, deadlineDate = null,
+  useSavedSchedule = false }, delivery = { getStatus: getWhatsAppStatus, sendSchedule: sendMarkingSchedule, notify: notifyCurrentMarkingTurn }) {
+  if (delivery.getStatus().status !== 'CONNECTED') return { started: false, reason: 'WhatsApp desconectado.' };
   const competency = db.prepare('SELECT * FROM competencies WHERE id=?').get(competencyId);
   if (!competency) return { started: false, reason: 'Mês não encontrado.' };
   const administratorId = userId || db.prepare(`SELECT id FROM users WHERE role='ADMIN' AND active=1 ORDER BY id LIMIT 1`).get()?.id;
   if (!administratorId) return { started: false, reason: 'Administrador não encontrado.' };
+  if (useSavedSchedule) {
+    if (!competency.generated_at || competency.status === 'HOMOLOGATED') return { started: false, reason: 'Escolha uma escala já gerada e não homologada para iniciar a fila.' };
+    if (db.prepare('SELECT 1 FROM marking_turns WHERE active=1 LIMIT 1').get()) return { started: false, reason: 'Já existe uma fila aberta ou programada. Consulte /cronograma. Para substituir a fila, use iniciar cronograma com data e coluna.' };
+    if (![2, 3, 4].includes(column)) return { started: false, reason: 'Coluna inválida no cronograma.' };
+    if (column > 2 && !db.prepare('SELECT 1 FROM service_slots WHERE competency_id=? AND current_capacity>=? LIMIT 1').get(competency.id, column)) {
+      return { started: false, reason: `A ${column}ª coluna ainda não está aberta nesse mês.` };
+    }
+    const members = eligibleMembers();
+    if (!members.length) return { started: false, reason: 'Preencha o cronograma com datas e horários na página Antiguidade.' };
+    const first = dayjs(members[0].deadline_at);
+    const start = first.startOf('day').hour(6).minute(0).second(0).millisecond(0);
+    if (!first.isValid() || members.some((member, index) => {
+      const deadline = dayjs(member.deadline_at);
+      return !deadline.isValid() || deadline.format('YYYY-MM-DD') !== first.format('YYYY-MM-DD')
+        || !deadline.isAfter(start) || (index > 0 && !deadline.isAfter(dayjs(members[index - 1].deadline_at)));
+    })) return { started: false, reason: 'Os prazos do cronograma precisam estar em ordem crescente, após as 06h e no mesmo dia. Ajuste a página Antiguidade.' };
+    if (!members.some((member) => dayjs(member.deadline_at).isAfter(dayjs()))) return { started: false, reason: 'Todos os prazos do cronograma já venceram. Atualize as datas e os horários na Antiguidade.' };
+    startsAt = start.toISOString();
+    rebaseDeadlines = false;
+  }
   if (rebaseDeadlines && !rebaseDeadlinesForRound(administratorId, deadlineDate)) return { started: false, reason: 'Os horários precisam estar preenchidos, em ordem crescente e dentro do mesmo dia.' };
-  if (!openPreparedMarkingSequence(competency, administratorId)) return { started: false, reason: 'Não foi possível abrir a fila.' };
+  if (!openPreparedMarkingSequence(competency, administratorId, useSavedSchedule)) return { started: false, reason: 'Não foi possível abrir a fila.' };
+  if (useSavedSchedule) writeSetting('bot_active_selection_month', dayjs().format('YYYY-MM'), administratorId);
   const scheduledStart = startsAt && dayjs(startsAt).isAfter(dayjs()) ? dayjs(startsAt).toISOString() : '';
   writeSetting('bot_active_marking_column', column, administratorId);
   writeSetting('bot_marking_round_starts_at', scheduledStart, administratorId);
   writeSetting('automation_last_marking_reminder_at', '', administratorId);
-  const schedule = await sendMarkingSchedule({ competencyId: competency.id, column, started: true, startsAt: scheduledStart || null });
-  const reminder = scheduledStart ? false : await notifyCurrentMarkingTurn();
+  let schedule = { sent: false };
+  let reminder = false;
+  try { schedule = await delivery.sendSchedule({ competencyId: competency.id, column, started: true, startsAt: scheduledStart || null }); }
+  catch (error) { console.warn('Fila iniciada, mas o cronograma não foi enviado:', error.message); }
+  if (!scheduledStart) {
+    try { reminder = await delivery.notify(); }
+    catch (error) { console.warn('Fila iniciada, mas a chamada não foi enviada:', error.message); }
+  }
   writeSetting(`marking_round_${competency.id}_${column}`, `${reason}:${now()}`, administratorId);
   return { started: true, scheduled: Boolean(scheduledStart), startsAt: scheduledStart || null, scheduleSent: schedule.sent, reminderSent: reminder, column };
 }

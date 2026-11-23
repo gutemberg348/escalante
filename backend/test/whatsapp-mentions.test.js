@@ -1032,6 +1032,70 @@ test('an administrator must provide the start date and column when starting a sc
   assert.match(replies.at(-1).text, /Informe a coluna/i);
 });
 
+for (const command of ['/iniciar marcação', '/iniciar marcacao', '/começar marcação', '/marcação', '/marcacao', '@Escalante iniciar a marcação', '@Escalante marcação']) {
+  test(`${command} uses the saved schedule start command and checks configured administrator permission`, async () => {
+    const mentions = command.startsWith('/') ? [] : [bot];
+    const quoted = { participant: other, quotedMessage: { conversation: 'dia 20 noite' } };
+    await receive(command, mentions, quoted);
+    assert.match(replies.at(-1).text, /Somente administradores configurados no painel WhatsApp podem iniciar a marcação/);
+    assert.deepEqual(assignedIds(), []);
+    setting.run('whatsapp_admin_member_ids', '[1]', stamp);
+    await receive(command, mentions, quoted);
+    // This integration socket is deliberately disconnected from real WhatsApp.
+    // Reaching the starter proves that no new date/column was requested and
+    // the quoted person's booking was not executed.
+    assert.match(replies.at(-1).text, /Não foi possível iniciar a marcação: WhatsApp desconectado/);
+    assert.deepEqual(assignedIds(), []);
+    assert.equal(db.prepare('SELECT COUNT(*) n FROM marking_turns WHERE active=1').get().n, 0);
+  });
+}
+
+test('iniciar marcacao with date and column still accepts the explicit schedule format', async () => {
+  setting.run('whatsapp_admin_member_ids', '[1]', stamp);
+  await receive(`/iniciar marcação dia 25/09/${futureYear} 2ª coluna`, []);
+  assert.match(replies.at(-1).text, /Não foi possível iniciar o cronograma: WhatsApp desconectado/);
+});
+
+for (const selector of ['dezembro', 'dezebro', 'mês 12', '12', '12/ANO', 'dezembro de ANO']) test(`saved schedule start accepts month ${selector}`, async () => {
+  const target = generatedMonth(futureYear, 12);
+  setting.run('whatsapp_admin_member_ids', '[1]', stamp);
+  const before = db.prepare('SELECT * FROM system_settings ORDER BY key').all();
+  await receive(`@Escalante iniciar marcação ${selector.replace('ANO', String(futureYear))}`, [bot]);
+  assert.match(replies.at(-1).text, /WhatsApp desconectado/);
+  assert.ok(replies.at(-1).text.includes(target.name));
+  assert.deepEqual(db.prepare('SELECT * FROM system_settings ORDER BY key').all(), before);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM marking_turns WHERE active=1').get().n, 0);
+});
+
+test('saved schedule month selection rejects unknown, multiple or ungenerated months before writing', async () => {
+  setting.run('whatsapp_admin_member_ids', '[1]', stamp);
+  const before = db.prepare('SELECT * FROM system_settings ORDER BY key').all();
+  for (const suffix of ['fevereiro de 2098', 'mês 13', 'dezembro e novembro', 'mes inexistente']) {
+    await receive(`/iniciar marcação ${suffix}`, []);
+    assert.match(replies.at(-1).text, /não foi gerada|não foi gerado|ainda não foi gerada|Mês inválido|somente um mês|mês válido/);
+    assert.deepEqual(db.prepare('SELECT * FROM system_settings ORDER BY key').all(), before);
+    assert.equal(db.prepare('SELECT COUNT(*) n FROM marking_turns WHERE active=1').get().n, 0);
+  }
+});
+
+test('explicit month on a marking start never bypasses configured admin permission', async () => {
+  generatedMonth(futureYear, 12);
+  await receive('/iniciar marcação dezembro', []);
+  assert.match(replies.at(-1).text, /Somente administradores configurados/);
+  assert.equal(activeCompetency().id, competency.id);
+});
+
+test('iniciar marcacao mes que vem uses the next calendar month, not the month after the current selection', async () => {
+  const current = new Date();
+  const next = new Date(current.getFullYear(), current.getMonth() + 1, 1);
+  const target = generatedMonth(next.getFullYear(), next.getMonth() + 1);
+  setting.run('whatsapp_admin_member_ids', '[1]', stamp);
+  await receive('@Escalante iniciar marcação mês que vem', [bot]);
+  assert.match(replies.at(-1).text, /WhatsApp desconectado/);
+  assert.ok(replies.at(-1).text.includes(target.name));
+  assert.equal(activeCompetency().id, competency.id);
+});
+
 test('a configured administrator can stop a scheduled queue and leave marking free', async () => {
   setting.run('whatsapp_admin_member_ids', '[1]', stamp);
   const futureStart = new Date(Date.now() + 86_400_000).toISOString();
