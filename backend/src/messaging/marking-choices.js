@@ -1,5 +1,6 @@
 const both = ['DIURNO', 'NOTURNO'];
 const guidance = 'Não entendi com segurança os dias e turnos. Nenhuma marcação foi feita. Use: "20 dia", "20 noite", "20 24h" ou "20 dia; 21 noite".';
+const twelveHourGuidance = 'Para uma marcação de 12 horas, informe dia ou noite. Nenhuma marcação foi feita.';
 
 // Parse the whole selection before any assignment is written. Explicit periods
 // belong to the adjacent list of days; semicolons/newlines start a new list.
@@ -25,20 +26,31 @@ export function parseMarkingRequest(body, { month = null, year = null, today = n
     .replace(/\b0?7(?:(?:H|:)(?:00)?)?\s*(?:AS|A|ATE|-)\s*19(?:(?:H|:)(?:00)?)?\b/g, ' SHIFT_DAY ')
     .replace(/\b19(?:(?:H|:)(?:00)?)?\s*(?:AS|A|ATE|-)\s*0?7(?:(?:H|:)(?:00)?)?\b/g, ' SHIFT_NIGHT ')
     .replace(/\b(?:24\s*(?:HORAS?|HRAS?|HRS?|H)|VINTE E QUATRO HORAS?)\b/g, ' SHIFT_BOTH ')
-    .replace(/\b(?:DIA(?:\s+E|\s*\/)?\s*NOITE|NOITE\s+E\s+DIA|DIURNO\s+E\s+NOTURNO|AMBOS(?:\s+OS)?\s+TURNOS|DIA\s+(?:INTEIRO|TODO)|INTEGRAL)\b/g, ' SHIFT_BOTH ')
+    .replace(/\b(?:DIA(?:\s+E|\s*\/)?\s*NOITE|NOITE\s+E\s+DIA|DIURNO\s+E\s+NOTURNO|AMBOS(?:\s+OS)?\s+TURNOS|DIA\s+(?:INTEIRO|TODO)|DIAS?\s+COMPLETOS?|INTEGRAL)\b/g, ' SHIFT_BOTH ')
     .replace(/\b12\s*(?:HORAS?|HRS?|H)\b/g, ' DURATION_TWELVE ')
     // Com uma duração explícita, "dia" é o turno, não o prefixo da data.
     // Ex.: 12h "dia" hoje -> somente DIURNO na data atual.
     .replace(/\b(DURATION_TWELVE)\s+DIA\s+(?=\d)/g, '$1 SHIFT_DAY ')
     .replace(/\b(?:DIAS?|DATA)\s*(?=\d)/g, ' ')
     .replace(/\b(?:NOITE|NOTURNO|NOTURNA)\b/g, ' SHIFT_NIGHT ')
-    .replace(/\b(?:DIA|DIURNO|DIURNA)\b/g, ' SHIFT_DAY ');
+    .replace(/\b(?:DIA|DIURNO|DIURNA)\b/g, ' SHIFT_DAY ')
+    .replace(/\bDURATION_TWELVE\s+(?:DE|A|DA)\s+(SHIFT_DAY|SHIFT_NIGHT)\b/g, 'DURATION_TWELVE $1')
+    .replace(/\bSHIFT_BOTH\s+SHIFT_BOTH\b/g, 'SHIFT_BOTH')
+    .replace(/,\s*(?:;\s*)+(?=\d)/g, ', ');
   if (/\b(?:MANHA|TARDE|MADRUGADA)\b|\d\s*(?:A|AS|ATE|-)\s*\d|\b\d+(?::\d+|H(?:\d+)?)\b/.test(text)) return invalid();
-  // Ignore natural command introductions/names, but validate all text from the
-  // first requested day/period onwards (including a typo after a valid choice).
+  // Discard the command introduction before interpreting the first list.
   const start = text.search(/\b(?:\d|SHIFT_|DURATION_)/);
   if (start < 0) return { choices: [], error: null };
-  text = text.slice(start)
+  text = text.slice(start);
+  // A duration heading owns the following list, even if the dates start on
+  // the next line. Keep it separate from dates belonging to a previous list.
+  text = text.replace(/(^|;)\s*((?:DURATION_TWELVE\s+)?SHIFT_(?:DAY|NIGHT|BOTH)|DURATION_TWELVE)\s*(?=;)/g, '$1 $2:');
+  const heading = /\b((?:DURATION_TWELVE\s+)?SHIFT_(?:DAY|NIGHT|BOTH)|DURATION_TWELVE)\s*:\s*(?:;\s*)*/g;
+  for (const match of text.matchAll(heading)) {
+    if (!/^\d/.test(text.slice(match.index + match[0].length))) return invalid();
+  }
+  text = text.replace(heading, '; $1 ');
+  text = text
     .replace(/\b(?:POR\s+FAVOR|POR\s+GENTILEZA|PFV|PFF|OBRIGADO|OBRIGADA)\b/g, ' ')
     .replace(/\b(?:NO|NOS|NA|NAS|DO|DOS|DA|DAS|DE|A|AS|AO|PELA|PELO|TURNO|PERIODO|SO|SOMENTE|APENAS)\b/g, ' ')
     .replace(/\b(?:D|DIU)\b/g, ' SHIFT_DAY ')
@@ -70,7 +82,7 @@ export function parseMarkingRequest(body, { month = null, year = null, today = n
   for (const match of tokens) {
     const token = match[0];
     if (token === ';') {
-      if (!flush()) return invalid();
+      if (!flush()) return invalid(twelveHourGuidance);
       inherited = null;
     } else if (token === ',' || token === 'E') {
       continue;
@@ -95,7 +107,7 @@ export function parseMarkingRequest(body, { month = null, year = null, today = n
       pending.push(day);
     }
   }
-  if (!flush()) return invalid();
+  if (!flush()) return invalid(twelveHourGuidance);
   if (!selections.size) return invalid();
   return { choices: [...selections].sort(([a], [b]) => a - b)
     .map(([day, selection]) => ({ day, periods: both.filter(period => selection.periods.has(period)) })), error: null };

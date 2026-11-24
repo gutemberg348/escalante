@@ -15,7 +15,7 @@ import { regenerateOrdinaryAssignments, previewMonthGeneration } from '../schedu
 export { parseNaturalChoices } from './marking-choices.js';
 
 const authDirectory = path.resolve(path.dirname(env.DATABASE_PATH), 'whatsapp-auth');
-const commandHandlerVersion = 'mentions-v16-self-service-removal';
+const commandHandlerVersion = 'mentions-v17-booking-lists';
 const commandMonthContext = new AsyncLocalStorage();
 const connection = {
   socket: null, saveCreds: null, status: 'DISCONNECTED', qrDataUrl: null, qrIssued: false,
@@ -336,7 +336,7 @@ function withoutBotMention(body) {
 function withoutBotMentionPreservingLines(body) {
   return body.replace(/@\S+/g, ' ')
     .split(/\r?\n/)
-    .map((line) => line.trim())
+    .map((line) => line.trim().replace(/\s+/g, ' '))
     .filter(Boolean)
     .join('\n');
 }
@@ -453,10 +453,19 @@ function writtenServiceTarget(text, explicitTarget, sender) {
   if (/^ESCALA\b/.test(text) || parseMarkingScheduleCommand(text)) return { member: sender };
   const action = delegatedRemovalAction(text) ?? text.match(delegatedMarkingPattern);
   if (!action || action.index !== 0) return { member: sender };
-  const rest = text.slice(action[0].length).trim();
-  const dateStart = rest.search(/\b(?:DIAS?\s+(?=\d)|HOJE|HOJ|HJ|AMANHA|NOITE|DIURNO|NOTURNO|\d)/);
+  let rest = text.slice(action[0].length).trim();
+  // Strip a month introduced as part of the request before looking for a
+  // written recipient. A bare name such as "Marco" can itself be a member.
+  const monthIntro = rest.search(/\b(?:MES|NO|EM|DO|DE|PARA|PRO|PRA|ESTE|ESSE|NESTE|NESSE|DESTE|DESSE|PROXIMO)\b/);
+  if (monthIntro >= 0) {
+    const suffix = rest.slice(monthIntro);
+    const month = parseRequestedMonth(suffix);
+    if (month.error) return { error: month.error };
+    if (month.requested) rest = rest.slice(0, monthIntro) + month.text;
+  }
+  const dateStart = rest.search(/\b(?:DIAS?\s*(?=[:\d])|DIAS?\s+COMPLETOS?\b|HOJE|HOJ|HJ|AMANHA|NOITE|DIURNO|NOTURNO|\d)/);
   if (dateStart < 0) return { member: sender };
-  const name = rest.slice(0, dateStart).replace(/\b(?:DO|NO|DE|PARA)\s*$/, '').trim();
+  const name = rest.slice(0, dateStart).replace(/\b(?:DOS?|NOS?|OS|DE|PARA)\s*$/, '').trim();
   if (!name || /^(?:EU|MIM|PARA MIM|ME|MEU|MINHA|O|A)$/.test(name)) return { member: sender };
   // "O serviço" and "meu serviço" describe the sender's booking, not a
   // member name. Keep this vocabulary closed so unknown names still fail.
@@ -884,7 +893,7 @@ export async function handleIncomingMessages(socket, { messages }) {
     if (!isAddressedToBot(socket, message, body)) continue;
     const directText = withoutBotMention(body);
     const directMultilineText = withoutBotMentionPreservingLines(body);
-    const directSelection = parseMarkingRequest(directText);
+    const directSelection = parseMarkingRequest(directMultilineText);
     const directChoices = directSelection.choices;
     const directTarget = await mentionedMember(socket, message);
     const markingSchedulePlan = parseMarkingSchedulePlan(directMultilineText);
@@ -899,10 +908,10 @@ export async function handleIncomingMessages(socket, { messages }) {
     const hasDirectMarkingRequest = directChoices.length > 0 || Boolean(directSelection.error)
       || isDelegatedMarkingText(directText) || isDelegatedRemovalText(directText) || isAssignmentChangeText(directText)
       || Boolean(memberStatusRequest);
-    // A removal without an explicit member belongs to the sender, including
-    // replies: nobody needs to mention their own contact. Other command types
-    // retain delegation to the quoted author; explicit targets take priority.
-    const quotedTargetIdentity = !undoRequest && !isDelegatedRemovalText(directText) && !directTarget.required && hasDirectMarkingRequest && quotedCandidate
+    // Explicit booking verbs without a recipient refer to the sender. A
+    // bare date in a reply can still delegate to the quoted participant.
+    const senderBooking = /^(?:LANCA|LANCAR|LANCE|MARCA|MARCAR|MARQUE)\b/.test(normalizeMentionLabel(directText).replace(/^\/+\s*/, ''));
+    const quotedTargetIdentity = !undoRequest && !senderBooking && !isDelegatedRemovalText(directText) && !directTarget.required && hasDirectMarkingRequest && quotedCandidate
       ? await resolveMemberIdentityWithMapping(socket, quotedCandidate.key)
       : null;
     // A new command takes precedence over a quoted message. Quoting a request
@@ -913,9 +922,7 @@ export async function handleIncomingMessages(socket, { messages }) {
     const quotedRequest = hasDirectRequest ? null : quotedCandidate;
     const effectiveBody = quotedRequest?.body ?? body;
     const explicitSlash = effectiveBody.startsWith('/');
-    const commandText = markingSchedulePlan && !quotedRequest
-      ? directMultilineText
-      : withoutBotMention(effectiveBody);
+    const commandText = quotedRequest ? withoutBotMentionPreservingLines(effectiveBody) : directMultilineText;
     const identity = quotedRequest
       ? await resolveMemberIdentityWithMapping(socket, quotedRequest.key)
       : (originalIdentity.member ? originalIdentity : await resolveMemberIdentityWithMapping(socket, message.key));
@@ -1420,10 +1427,15 @@ async function executeCommand(member, rawBody, { explicitSlash = false, targetMe
   const commandBody = rawBody.trim().replace(/^\/+/, '').trim();
   const decoratedRequest = extractDisplayPrefix(commandBody);
   if (decoratedRequest.error) return decoratedRequest.error;
-  const normalized = decoratedRequest.text.toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  const normalized = normalizeMentionLabel(decoratedRequest.text);
   const [command, argument] = normalized.split(/\s+/, 2);
   if (['MENU', 'AJUDA', 'COMANDOS'].includes(command)) return commandMenu();
   if (command === 'MESES') return generatedCompetenciesMessage();
+  const markingSchedulePlan = parseMarkingSchedulePlan(rawBody);
+  if (markingSchedulePlan) {
+    if (!panelAdministrator) return 'Somente administradores configurados no painel WhatsApp podem preencher horários e iniciar a fila pelo cronograma.';
+    return saveAndStartMarkingSchedulePlan(markingSchedulePlan, member);
+  }
   const competencySwitch = normalized.match(/^(?:ESCALA\s+(?:ZAP|WHATSAPP)|(?:USAR|ATIVAR|SELECIONAR)[-\s]+(?:A\s+)?ESCALA|(?:MUDAR|TROCAR|PASSAR)\s+(?:(?:A\s+)?ESCALA\s+)?PARA)\s+(.+)$/);
   if (competencySwitch && !targetMember) {
     if (!panelAdministrator) return 'Somente administradores configurados no painel WhatsApp podem trocar o mês selecionado.';
@@ -1441,11 +1453,6 @@ async function executeCommand(member, rawBody, { explicitSlash = false, targetMe
     if (request.error) return request.error;
     if (request.requested) return commandMonthContext.run(request, () => applyColumnCommand(parseColumnCommand(request.text), member));
     return applyColumnCommand(columnRequest, member);
-  }
-  const markingSchedulePlan = parseMarkingSchedulePlan(rawBody);
-  if (markingSchedulePlan) {
-    if (!panelAdministrator) return 'Somente administradores configurados no painel WhatsApp podem preencher horários e iniciar a fila pelo cronograma.';
-    return saveAndStartMarkingSchedulePlan(markingSchedulePlan, member);
   }
   const memberStatusRequest = parseMemberStatusCommand(commandBody);
   if (memberStatusRequest) {
@@ -1534,7 +1541,7 @@ async function executeCommand(member, rawBody, { explicitSlash = false, targetMe
     if (target.error) return target.error;
     if (target.member.id !== member.id) targetMember = target.member;
   }
-  const delegatedSelection = parseSelection(normalized);
+  const delegatedSelection = parseSelection(decoratedRequest.text);
   if (targetMember && (delegatedAction || (requiresTarget && (delegatedSelection.choices.length > 0 || delegatedSelection.error)))) {
     if (delegatedSelection.error) return delegatedSelection.error;
     const choices = delegatedSelection.choices;
@@ -1626,7 +1633,7 @@ async function executeCommand(member, rawBody, { explicitSlash = false, targetMe
   const cancellation = normalized.match(/\bCANCELAR?\s+#?(\d+)\b/);
   if (cancellation) return cancelMemberAssignment(member, cancellation[1]);
   if (command === 'MARCAR') {
-    const selection = normalized.slice('MARCAR'.length).trim();
+    const selection = decoratedRequest.text.slice('MARCAR'.length).trim();
     const parsed = parseSelection(selection);
     if (parsed.error) return parsed.error;
     const choices = parsed.choices;
@@ -1634,9 +1641,8 @@ async function executeCommand(member, rawBody, { explicitSlash = false, targetMe
     const result = assignMemberToSlot(member, selection);
     return result.startsWith('Marcação confirmada') ? resultWithNextTurn(member, result) : result;
   }
-  const parsed = parseSelection(normalized);
-  if (parsed.error) return parsed.error;
-  const choices = parsed.choices;
+  if (delegatedSelection.error) return delegatedSelection.error;
+  const choices = delegatedSelection.choices;
   if (choices.length) return assignNaturalChoices(member, choices, { displayPrefix: decoratedRequest.displayPrefix });
   if (command === 'CANCELAR') return cancelMemberAssignment(member, argument);
   return explicitSlash ? 'Comando não reconhecido. Envie /menu para ver os comandos disponíveis.' : null;

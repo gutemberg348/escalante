@@ -21,6 +21,8 @@ FORMAS DE CHAMAR O BOT
    Nesse caso, o pedido será feito para o autor da mensagem respondida.
    Para retirar serviço, sem outro militar informado, retira de quem enviou
    o comando, mesmo respondendo à mensagem de outra pessoa.
+   Se começar com "lançar" ou "marcar" e omitir o militar, a marcação
+   também fica para quem enviou o comando.
 
 5. Marcando o bot e o militar:
    @Escalante marque @Militar dia 20 noite
@@ -40,6 +42,19 @@ COMANDOS NORMAIS
    @Escalante amanhã 24 horas
 
 Sem informar o turno, o dia será interpretado como 24 horas: dia e noite.
+
+Para lançar vários dias para você, mande a lista em uma única mensagem:
+
+   @Escalante lançar no mês de dezembro os dias:
+   24 horas: 1, 8, 14, 17, 22, 29
+   12 horas noite: 3, 4, 11, 21
+   12 horas dia: 5, 10
+
+Os dias da linha de 24 horas recebem os dois turnos. Nas linhas de 12 horas,
+escreva "dia" ou "noite". Também pode abreviar para 24hrs, 12hrs dia ou
+12hrs noite. Para lançar a lista inteira como 24 horas, basta enviar:
+
+   @Escalante marcar no mês de dezembro os dias 01, 09, 14, 22, 29
 
 Para escolher o mês da marcação:
    /marcar dia 20 noite no próximo mês

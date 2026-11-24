@@ -24,6 +24,8 @@ const forms = [
   ['20 dia\n21 noite', [choice(20, day), choice(21, night)]],
   ['20 dia,21 noite', [choice(20, day), choice(21, night)]],
   ['20 noite;21', [choice(20, night), choice(21, full)]],
+  ['12hrs à noite:\n03,\n04\n24h dias completos: 07, 09', [choice(3, night), choice(4, night), choice(7, full), choice(9, full)]],
+  ['12horas dia\n02, 05\n24hrs\n01, 09', [choice(1, full), choice(2, day), choice(5, day), choice(9, full)]],
   ['20;21 noite', [choice(20, full), choice(21, night)]],
   ['20 dia;20 noite', [choice(20, full)]],
   ['20;20 dia', [choice(20, day)]],

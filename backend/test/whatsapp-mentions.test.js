@@ -1337,6 +1337,35 @@ function bookedDates() {
     JOIN service_slots s ON s.id=a.service_slot_id ORDER BY s.service_date,s.period,a.member_id`).all();
 }
 
+for (const [command, memberId, expected] of [
+  ['@Escalante lançar no mês de dezembro os dias:\n24 horas: 1, 8, 14, 17, 22, 29\n\n12 horas noite: 3, 4, 11, 21', 1,
+    { full: [1, 8, 14, 17, 22, 29], night: [3, 4, 11, 21] }],
+  ['/marcar no mês de dezembro os dias\n01, 09, 14, 22, 29', 1, { full: [1, 9, 14, 22, 29] }],
+  ['@Escalante lançar Sgt Alex no mês de dezembro nos dias:\n12hrs dia:\n02, 05\n24hrs: 01, 09', 18,
+    { full: [1, 9], day: [2, 5] }],
+]) test('booking lists resolve the recipient, month and each shift: ' + command, async () => {
+  generatedMonth(futureYear, 12);
+  await receive(command, command.startsWith('/') ? [] : [bot], {
+    participant: other, quotedMessage: { conversation: 'Segue a escala.' }
+  });
+  const rows = bookedDates();
+  const slots = rows.map(row => Number(row.service_date.slice(-2)) + ' ' + row.period);
+  assert.deepEqual(slots.sort(), [
+    ...expected.full.flatMap(day => [day + ' DIURNO', day + ' NOTURNO']),
+    ...(expected.day ?? []).map(day => day + ' DIURNO'),
+    ...(expected.night ?? []).map(day => day + ' NOTURNO')
+  ].sort(), replies[0]?.text);
+  assert.ok(rows.every(row => row.member_id === memberId && row.service_date.startsWith(futureYear + '-12-')));
+  assert.equal(activeCompetency().id, competency.id);
+  assert.match(replies[0].text, /dezembro/i);
+});
+
+test('an ambiguous twelve-hour section rejects the whole booking', async () => {
+  await receive('@Escalante lançar os dias:\n24h: 01, 09\n12horas: 03, 11', [bot]);
+  assert.deepEqual(bookedDates(), []);
+  assert.match(replies[0].text, /informe dia ou noite/i);
+});
+
 for (const selection of ['dia 12 *24h', '"dia 22" 24h']) test(`lancar a written registered name accepts ${selection} without booking the sender`, async () => {
   db.prepare("UPDATE members SET operational_name='Duarte' WHERE id=18").run();
   await receive(`@Escalante lançar o Sgt Duarte ${selection}`, [bot]);
