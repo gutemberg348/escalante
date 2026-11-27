@@ -47,7 +47,7 @@ export default function ScheduleManagement() {
   });
   const editable = ['ADMIN', 'SCHEDULER'].includes(me?.role);
   const eligibleMembers = useMemo(() => members.filter((member) => member.active
-    && (member.operational_status === 'ACTIVE' || (selectedServiceType === 'EXTRAORDINARY' && member.operational_status === 'VACATION'))
+    && (member.operational_status === 'ACTIVE' || (selectedServiceType === 'EXTRAORDINARY' && ['VACATION', 'LEAVE'].includes(member.operational_status)))
     && member.authorization_status === 'AUTHORIZED'), [members, selectedServiceType]);
   const slots = schedule?.items || [];
   const days = useMemo(() => {

@@ -122,7 +122,7 @@ test('homologation prevents restoring a removed assignment', async () => {
 test('undo cannot restore extras for a now inactive member or above a new hour limit', async () => {
   const id=add();
   await record(()=>db.prepare('DELETE FROM assignments WHERE id=?').run(id));
-  db.prepare("UPDATE members SET operational_status='LEAVE' WHERE id=1").run();
+  db.prepare("UPDATE members SET operational_status='AWAY' WHERE id=1").run();
   assert.equal(undo().commandId,undefined);
   assert.equal(db.prepare('SELECT COUNT(*) n FROM assignments').get().n,0);
   db.prepare("UPDATE members SET operational_status='ACTIVE',monthly_hour_limit=12 WHERE id=1").run();

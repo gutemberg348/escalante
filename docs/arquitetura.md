@@ -231,8 +231,8 @@ Em **Editar**, o campo **Limite mensal (horas)** define o teto individual entre 
 |---|---|---|
 | Ativo | `ACTIVE` | Elegível, desde que autorizado. |
 | Desativado | `INACTIVE` | Não entra nas marcações. |
-| Férias | `VACATION` | Bloqueado para a escala no período. |
-| Licença | `LEAVE` | Bloqueado para a escala no período. |
+| Férias | `VACATION` | Pode marcar extras se autorizado. Fica fora da geração de ordinários. |
+| Licença | `LEAVE` | Pode marcar extras se autorizado. Fica fora da geração de ordinários. |
 | Afastado | `AWAY` | Bloqueado para a escala no período. |
 
 Clique em **Editar** na linha para alterar nome, graduação, telefone, JID, Base, autorização, situação e observação. Alterações não apagam o histórico do militar.

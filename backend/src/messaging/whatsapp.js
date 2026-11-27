@@ -1355,7 +1355,7 @@ async function saveAndStartMarkingSchedulePlan(plan, requestedBy) {
     if (usedMembers.has(member.id)) return `O militar *${member.rank} ${member.operational_name}* aparece mais de uma vez no cronograma.`;
     usedMembers.add(member.id);
     displayedSchedule.push({ member, deadlineAt: entry.deadlineAt });
-    if (member.active !== 1 || !['ACTIVE', 'VACATION'].includes(member.operational_status) || member.authorization_status !== 'AUTHORIZED') {
+    if (member.active !== 1 || !['ACTIVE', 'VACATION', 'LEAVE'].includes(member.operational_status) || member.authorization_status !== 'AUTHORIZED') {
       skippedMembers.push(member);
       continue;
     }
@@ -1590,7 +1590,7 @@ async function executeCommand(member, rawBody, { explicitSlash = false, targetMe
       entityId: activeCompetency()?.id ?? '', before: { activeTurns, scheduledStart },
       after: { activeTurns: 0, scheduledStart: '' }, reason: 'Fila encerrada pelo administrador no WhatsApp' });
     if (!activeTurns && !scheduledStart) return '*MARCAÇÃO LIVRE*\n\nNão havia cronograma em andamento. A marcação já está livre.';
-    return '*CRONOGRAMA ENCERRADO*\n\nA fila foi encerrada. A marcação agora está livre para os militares autorizados, inclusive quem está de férias.';
+    return '*CRONOGRAMA ENCERRADO*\n\nA fila foi encerrada. A marcação agora está livre para os militares autorizados, inclusive quem está de férias ou licença.';
   }
   if (markingScheduleRequest?.action === 'START') {
     if (!panelAdministrator) return 'Somente administradores configurados no painel WhatsApp podem iniciar ou reiniciar a fila do cronograma.';
@@ -1751,7 +1751,7 @@ async function turnAnnouncement(change, reason) {
     if (change.needsSchedule) {
       return { type: 'TEXT', text: `*CRONOGRAMA PENDENTE*\n\nA vez de *${change.previous.rank} ${change.previous.operational_name}* foi encerrada, mas o próximo militar não possui data e horário cadastrados. O escalante deve ajustar a página Antiguidade.`, mentions: [] };
     }
-    return { type: 'TEXT', text: '*RODADA DE MARCAÇÃO ENCERRADA*\n\nA fila desta data terminou. A marcação agora está livre para os militares autorizados, inclusive quem está de férias. Outra data ou coluna só começará com um novo comando do administrador.', mentions: [] };
+    return { type: 'TEXT', text: '*RODADA DE MARCAÇÃO ENCERRADA*\n\nA fila desta data terminou. A marcação agora está livre para os militares autorizados, inclusive quem está de férias ou licença. Outra data ou coluna só começará com um novo comando do administrador.', mentions: [] };
   }
   return buildMarkingReminder(change.next);
 }
@@ -1761,7 +1761,7 @@ function advanceMarkingTurn(expectedMemberId) {
   if (!previous || previous.member_id !== expectedMemberId) return null;
   const next = db.prepare(`SELECT m.id,m.rank,m.operational_name,m.seniority_position,m.phone_number,m.whatsapp_jid,d.deadline_at
     FROM members m JOIN marking_deadlines d ON d.member_id=m.id
-    WHERE m.seniority_position>? AND m.active=1 AND m.operational_status IN ('ACTIVE','VACATION')
+    WHERE m.seniority_position>? AND m.active=1 AND m.operational_status IN ('ACTIVE','VACATION','LEAVE')
       AND m.authorization_status='AUTHORIZED'
     ORDER BY m.seniority_position LIMIT 1`).get(previous.seniority_position);
   const nextDeadline = next?.deadline_at ?? null;
@@ -1845,7 +1845,7 @@ async function changeMemberOperationalStatus(targetMember, status, requestedBy, 
     })
     : null;
   const response = `*SITUAÇÃO ATUALIZADA*\n${current.rank} ${current.operational_name}: ${operationalLabel[status]}.`;
-  const result = ['LEAVE', 'AWAY', 'INACTIVE'].includes(status)
+  const result = ['AWAY', 'INACTIVE'].includes(status)
     ? await resultWithNextTurn(current, response, 'STATUS_CHANGED')
     : response;
   if ((status !== 'VACATION' && !reactivationGeneration) || !competency) return result;
@@ -2413,7 +2413,7 @@ function memberHoursMessage(member) {
 }
 
 function eligible(member) {
-  return member.active === 1 && ['ACTIVE', 'VACATION'].includes(member.operational_status) && member.authorization_status === 'AUTHORIZED';
+  return member.active === 1 && ['ACTIVE', 'VACATION', 'LEAVE'].includes(member.operational_status) && member.authorization_status === 'AUTHORIZED';
 }
 
 function memberHourLimit(member, competency) {

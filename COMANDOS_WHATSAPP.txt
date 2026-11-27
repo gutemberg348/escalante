@@ -228,8 +228,8 @@ Somente "12h" não define o turno; escreva dia ou noite.
    A lista pode conter somente os militares que participarão daquela rodada,
    respeitando entre eles a ordem da página Antiguidade. Quem não for enviado
    fica fora da fila e poderá marcar quando a rodada terminar e a marcação ficar
-   livre. Militar de férias continua participando normalmente da fila, pois pode
-   marcar serviços extras. Quem estiver de licença, afastado, desativado ou não
+   livre. Militar de férias ou licença continua participando da fila, pois pode
+   marcar serviços extras. Quem estiver afastado, desativado ou não
    autorizado continuará aparecendo no /cronograma, mas será ignorado na fila.
    Para a 3ª ou a 4ª coluna, abra a coluna antes de enviar a lista.
 
@@ -472,9 +472,9 @@ Para sair de férias e voltar ao serviço ativo:
    /ativo @Militar
    /voltar-ferias @Militar
 
-Férias mantêm o militar liberado para marcar serviços extras e participar do
+Férias e licença mantêm o militar autorizado liberado para marcar serviços extras e participar do
 cronograma, mas o retiram da escala ordinária enquanto durar a situação.
-Licença, afastado e desativado impedem novas marcações. Ativo libera novamente
+Afastamento e desativação impedem novas marcações. Ativo libera novamente
 o militar, sem alterar a autorização.
 
 Ao colocar um militar de férias, o bot atua na escala atualmente selecionada:

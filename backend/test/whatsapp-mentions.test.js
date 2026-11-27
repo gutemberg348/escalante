@@ -279,6 +279,13 @@ test('an inactive target does not cause booking in sender name', async () => {
   assert.deepEqual(assignedIds(), []);
   assert.match(replies[0].text, /não permite/);
 });
+
+test('a member on leave can book both extra shifts without a wing', async () => {
+  db.prepare("UPDATE members SET operational_status='LEAVE' WHERE id=1").run();
+  await receive('/marcar dia 20 24h', []);
+  assert.deepEqual(assignedIds(), [1, 1]);
+  assert.deepEqual(db.prepare('SELECT DISTINCT service_type FROM assignments').all(), [{ service_type: 'EXTRAORDINARY' }]);
+});
 test('a member excluded from ordinary generation can still use the bot and book an extra shift', async () => {
   db.prepare('UPDATE members SET ordinary_eligible=0 WHERE id=18').run();
 

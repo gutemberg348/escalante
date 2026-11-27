@@ -56,9 +56,9 @@ test('a schedule already in its open window immediately calls the first member w
   assert.deepEqual(sent.at(-1), ['notify', expected.member_id]);
 });
 
-test('vacation participates while leave, unauthorized and omitted members do not block the saved subset', async () => {
-  db.prepare("UPDATE members SET operational_status='VACATION' WHERE id=1").run();
-  db.prepare("UPDATE members SET operational_status='LEAVE' WHERE id=2").run();
+test('leave participates in the saved queue ahead of a member on vacation', async () => {
+  db.prepare("UPDATE members SET operational_status='LEAVE' WHERE id=1").run();
+  db.prepare("UPDATE members SET operational_status='VACATION' WHERE id=2").run();
   db.prepare('DELETE FROM marking_deadlines WHERE member_id=3').run();
   assert.equal((await start()).started, true);
   assert.equal(db.prepare('SELECT member_id FROM marking_turns WHERE active=1').get().member_id, 1);

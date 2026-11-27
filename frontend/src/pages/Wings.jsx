@@ -10,7 +10,7 @@ const dateLabel = writtenDate;
 const statusLabel = { ACTIVE: 'Ativo', VACATION: 'Férias', LEAVE: 'Licença', AWAY: 'Afastado', INACTIVE: 'Desativado' };
 const localToday = () => new Date().toLocaleDateString('en-CA');
 const monthLabel = (value) => value ? new Date(`${value.slice(0, 7)}-01T12:00:00`).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' }) : '';
-const membershipChanged = (current, next) => Boolean(next && (!current || next.wing_id !== current.wing_id || next.position_number !== current.position_number));
+const membershipChanged = (current, next) => current?.wing_id !== next?.wing_id || current?.position_number !== next?.position_number;
 
 export default function Wings() {
   const client = useQueryClient();
@@ -46,7 +46,7 @@ export default function Wings() {
   const nextMonthLabel = monthLabel(data?.nextMonth.startsAt);
   const futureView = rosterPeriod === 'NEXT';
   const visibleMemberships = (futureView ? data?.nextMemberships : data?.memberships) || [];
-  const pendingChanges = data ? data.nextMemberships.filter((next) => membershipChanged(data.memberships.find((row) => row.member_id === next.member_id), next)).length : 0;
+  const pendingChanges = data ? members.filter((member) => membershipChanged(data.memberships.find((row) => row.member_id === member.id), data.nextMemberships.find((row) => row.member_id === member.id))).length : 0;
   const refresh = async () => {
     await Promise.all(['wings', 'members', 'schedule-management', 'slots', 'dashboard', 'competencies'].map((key) => client.invalidateQueries({ queryKey: [key] })));
   };
@@ -54,10 +54,10 @@ export default function Wings() {
     onSuccess: (response) => { setPreview(response.data); setApplyImportToCurrentMonth(false); setImportFromDate(response.data.applyFromDate); saveImport.reset(); } });
   const saveImport = useMutation({ mutationFn: () => api.post('/wings/import', { competencyId: Number(competencyId),
     applyToCurrentMonth: applyImportToCurrentMonth, fromDate: applyImportToCurrentMonth ? importFromDate : undefined,
-    entries: preview.entries.map(({ memberId, wingId, positionNumber }) => ({ memberId, wingId, positionNumber })) }),
+    entries: preview.entries.map(({ memberId, wingId, positionNumber }) => ({ memberId, wingId, positionNumber: wingId ? positionNumber : null })) }),
     onSuccess: async (response) => { setLastChangedMembers(preview.entries.map((entry) => entry.memberId)); setRosterPeriod('NEXT'); setPreview(null); setFeedback(response.data.message); await refresh(); } });
   const move = useMutation({ mutationFn: () => {
-    const entries = [{ memberId: editing.memberId, wingId: Number(editing.wingId), positionNumber: Number(editing.positionNumber) }];
+    const entries = [{ memberId: editing.memberId, wingId: editing.wingId, positionNumber: editing.wingId ? Number(editing.positionNumber) : null }];
     if (editing.partnerId) entries.push({ memberId: Number(editing.partnerId), wingId: editing.originalWingId, positionNumber: editing.originalPosition });
     return api.post('/wings/move', { competencyId: Number(competencyId), scope: editing.scope, entries,
       fromDate: editing.scope === 'THIS_MONTH' ? editing.fromDate : undefined });
@@ -70,7 +70,7 @@ export default function Wings() {
     const rows = scope === 'NEXT_MONTH' ? data.nextMemberships : data.memberships;
     const current = rows.find((row) => row.member_id === memberId);
     move.reset();
-    setEditing({ memberId, scope, wingId: current?.wing_id || wings[0]?.id, positionNumber: current?.position_number || 1,
+    setEditing({ memberId, scope, wingId: current?.wing_id ?? wings[0]?.id, positionNumber: current?.position_number || 1,
       originalWingId: current?.wing_id || null, originalPosition: current?.position_number || null,
       fromDate: [start, localToday()].sort().at(-1), partnerId: '' });
   };
@@ -122,7 +122,7 @@ export default function Wings() {
                 return <div key={row.member_id} className={`wing-person${lastChangedMembers.includes(member.id) ? ' recently-saved' : ''}`}><strong>{name(member)}</strong><small>{statusLabel[member.operational_status]}{!member.ordinary_eligible ? ' · Fora da ordinária' : ''}</small>
                   {futureView && changed && <span className="wing-tag next">{current ? 'Troca programada' : 'Inclusão programada'} · desde {dateLabel(data.nextMonth.startsAt)}</span>}
                   {!futureView && row.temporary && <span className="wing-tag">Somente este mês · desde {dateLabel(row.from_date)}</span>}
-                  {!futureView && changed && <span className="wing-tag next">Próximo mês: {wings.find((item) => item.id === next.wing_id)?.name} · {next.position_number}ª posição</span>}
+                  {!futureView && changed && <span className="wing-tag next">Próximo mês: {next ? `${wings.find((item) => item.id === next.wing_id)?.name} · ${next.position_number}ª posição` : 'Sem ala'}</span>}
                   {editable && <button className="table-button" onClick={() => openMove(member.id)}>Trocar / remanejar</button>}</div>;
               })}</div>;
           })}</div></section>;
@@ -133,7 +133,7 @@ export default function Wings() {
           const next = data.nextMemberships.find((row) => row.member_id === member.id);
           const label = (row) => row ? `${wings.find((item) => item.id === row.wing_id)?.name} · ${row.position_number}ª` : 'Sem ala';
           const changed = membershipChanged(current, next);
-          return <tr key={member.id} className={lastChangedMembers.includes(member.id) ? 'recently-saved' : ''}><td className="wing-roster-member"><strong>{name(member)}</strong></td><td data-label={monthLabel(start)}>{label(current)}{current?.temporary && <small className="wing-table-note">Temporária</small>}</td><td data-label={nextMonthLabel} className={changed ? 'wing-future-cell' : ''}><strong>{label(next)}</strong>{changed && <small className="wing-planned-badge">{current ? 'Troca programada' : 'Inclusão programada'}</small>}</td><td data-label="Situação">{statusLabel[member.operational_status]}</td>
+          return <tr key={member.id} className={lastChangedMembers.includes(member.id) ? 'recently-saved' : ''}><td className="wing-roster-member"><strong>{name(member)}</strong></td><td data-label={monthLabel(start)}>{label(current)}{current?.temporary && <small className="wing-table-note">Temporária</small>}</td><td data-label={nextMonthLabel} className={changed ? 'wing-future-cell' : ''}><strong>{label(next)}</strong>{changed && <small className="wing-planned-badge">{!next ? 'Retirada programada' : current ? 'Troca programada' : 'Inclusão programada'}</small>}</td><td data-label="Situação">{statusLabel[member.operational_status]}</td>
             {editable && <td className="wing-roster-action"><button className="table-button" onClick={() => openMove(member.id)}>{next ? changed ? 'Editar programação' : 'Trocar ala' : 'Incluir na ala'}</button></td>}</tr>;
         })}</tbody></table></div></section>}
     </>}
@@ -145,11 +145,12 @@ export default function Wings() {
         {applyImportToCurrentMonth && <><label>A partir de<input type="date" value={importFromDate} min={preview.applyFromDate} max={end} disabled={saveImport.isPending} onChange={(event) => setImportFromDate(event.target.value)} /></label><p>Os serviços ordinários dos militares cadastrados serão recalculados a partir dessa data. Extras e datas anteriores serão preservados.</p></>}
         {!preview.canApplyCurrentMonth && <p>Esta escala já terminou. O cadastro será aplicado nas próximas gerações.</p>}
       </div>
+      <p>Quem ficar sem ala não entrará nos serviços ordinários gerados para o período.</p>
       {preview.unresolved.length > 0 && <div className="wings-import-notice"><strong>Precisam de conferência</strong>{preview.unresolved.map((item) => <p key={item.memberId}>{item.name}: {item.reason}</p>)}<p>Esses militares poderão ser incluídos manualmente depois do cadastro.</p></div>}
       <div className="table-wrap"><table className="wing-import-table"><thead><tr><th>Militar</th><th>Ala</th><th>Posição</th><th></th></tr></thead><tbody>{preview.entries.map((item, index) => <tr key={item.memberId}>
         <td className="wing-import-member"><strong>{item.name}</strong><small className="wing-table-note">{item.source === 'ESCALA' ? 'Identificado na escala' : item.source === 'MANUAL' ? 'Incluído nesta conferência' : 'Pelo ciclo ordinário anterior'}</small></td>
-        <td data-label="Ala"><select disabled={saveImport.isPending} aria-label={`Ala de ${item.name}`} value={item.wingId} onChange={(e) => setPreview({ ...preview, entries: preview.entries.map((row, i) => i === index ? { ...row, wingId: Number(e.target.value) } : row) })}>{wings.map((wing) => <option key={wing.id} value={wing.id}>{wing.name}</option>)}</select></td>
-        <td data-label="Posição"><select disabled={saveImport.isPending} aria-label={`Posição de ${item.name}`} value={item.positionNumber} onChange={(e) => setPreview({ ...preview, entries: preview.entries.map((row, i) => i === index ? { ...row, positionNumber: Number(e.target.value) } : row) })}><option value={1}>1ª</option><option value={2}>2ª</option></select></td>
+        <td data-label="Ala"><select disabled={saveImport.isPending} aria-label={`Ala de ${item.name}`} value={item.wingId ?? ''} onChange={(e) => setPreview({ ...preview, entries: preview.entries.map((row, i) => i === index ? { ...row, wingId: e.target.value ? Number(e.target.value) : null } : row) })}><option value="">Sem ala</option>{wings.map((wing) => <option key={wing.id} value={wing.id}>{wing.name}</option>)}</select></td>
+        <td data-label="Posição"><select disabled={saveImport.isPending || !item.wingId} aria-label={`Posição de ${item.name}`} value={item.positionNumber} onChange={(e) => setPreview({ ...preview, entries: preview.entries.map((row, i) => i === index ? { ...row, positionNumber: Number(e.target.value) } : row) })}><option value={1}>1ª</option><option value={2}>2ª</option></select></td>
         <td className="wing-import-action"><button disabled={saveImport.isPending} className="table-button" onClick={() => setPreview({ ...preview, entries: preview.entries.filter((row) => row.memberId !== item.memberId) })}>Deixar para depois</button></td></tr>)}</tbody></table></div>
       {!preview.entries.length && <p>Nenhum ciclo ordinário identificado. Inclua pelo menos um militar abaixo para começar.</p>}
       <label>Adicionar militar à conferência<select value="" onChange={(e) => { const member = members.find((item) => item.id === Number(e.target.value)); if (member) setPreview({ ...preview, entries: [...preview.entries,
@@ -161,13 +162,14 @@ export default function Wings() {
       <div className="modal-header"><div><span className="eyebrow">TROCA DE ALA</span><h2>{name(members.find((member) => member.id === editing.memberId))}</h2></div><button className="close-button" aria-label="Fechar" disabled={move.isPending} onClick={() => setEditing(null)}>×</button></div>
       <form className="form-grid" onSubmit={(e) => { e.preventDefault(); move.mutate(); }}>
         <label className="full-width">Quando aplicar?<select value={editing.scope} onChange={(e) => openMove(editing.memberId, e.target.value)}><option value="NEXT_MONTH">Próximo mês em diante · permanente</option><option value="THIS_MONTH">Somente este mês · temporária</option></select></label>
-        <label>Ala de destino<select value={editing.wingId} onChange={(e) => setEditing({ ...editing, wingId: Number(e.target.value), partnerId: '' })}>{wings.map((wing) => <option key={wing.id} value={wing.id}>{wing.name}</option>)}</select></label>
-        <label>Posição<select value={editing.positionNumber} onChange={(e) => setEditing({ ...editing, positionNumber: Number(e.target.value), partnerId: '' })}><option value={1}>1ª posição</option><option value={2}>2ª posição</option></select></label>
+        <label>Ala de destino<select value={editing.wingId ?? ''} onChange={(e) => setEditing({ ...editing, wingId: e.target.value ? Number(e.target.value) : null, partnerId: '' })}><option value="">Sem ala</option>{wings.map((wing) => <option key={wing.id} value={wing.id}>{wing.name}</option>)}</select></label>
+        <label>Posição<select disabled={!editing.wingId} value={editing.positionNumber} onChange={(e) => setEditing({ ...editing, positionNumber: Number(e.target.value), partnerId: '' })}><option value={1}>1ª posição</option><option value={2}>2ª posição</option></select></label>
         {editing.scope === 'THIS_MONTH' && <label>A partir de<input type="date" min={[start, localToday()].sort().at(-1)} max={end} required value={editing.fromDate} onChange={(e) => setEditing({ ...editing, fromDate: e.target.value })} /></label>}
-        {editing.originalWingId && <label className="full-width">Trocar com outro militar? (opcional)<select value={editing.partnerId} onChange={(e) => {
+        {editing.wingId != null && editing.originalWingId && <label className="full-width">Trocar com outro militar? (opcional)<select value={editing.partnerId} onChange={(e) => {
           const other = editRows.find((row) => row.member_id === Number(e.target.value));
           setEditing({ ...editing, partnerId: e.target.value, ...(other ? { wingId: other.wing_id, positionNumber: other.position_number } : {}) });
         }}><option value="">Somente remanejar para uma posição livre</option>{editRows.filter((row) => row.member_id !== editing.memberId).map((row) => <option key={row.member_id} value={row.member_id}>{name(members.find((member) => member.id === row.member_id))} · {wings.find((wing) => wing.id === row.wing_id)?.name} · {row.position_number}ª</option>)}</select></label>}
+        {!editing.wingId && <p className="full-width wings-import-notice" role="note">Sem ala, este militar ficará fora da geração de serviços ordinários no período escolhido.</p>}
         <p className="full-width wings-change-summary">{editing.scope === 'NEXT_MONTH' ? `A mudança será usada nas gerações a partir de ${dateLabel(data.nextMonth.startsAt)}. Se o mês já estiver gerado, aplique com Regerar.`
           : `Apenas os ordinários de ${dateLabel(editing.fromDate)} em diante serão recalculados neste mês. Os extras e os dias anteriores ficam preservados; no próximo mês, volta a ala permanente.`}</p>
         {move.isError && <p className="error full-width" role="alert">{move.error.response?.data?.message || 'Não foi possível salvar a mudança.'}</p>}

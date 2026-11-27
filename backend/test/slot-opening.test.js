@@ -45,6 +45,21 @@ const close = async (position = 3, role = 'ADMIN', id = slot.id, body = { compet
   return { status: response.status, data: await response.json() };
 };
 const slots = () => db.prepare('SELECT * FROM service_slots ORDER BY id').all();
+test('the panel allows a leave extra but refuses to assign or convert it to ordinary', async () => {
+  db.prepare("UPDATE members SET operational_status='LEAVE' WHERE id=2").run();
+  const options = (method, body) => ({ method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const position = url + '/' + slot.id + '/positions/1';
+  try {
+    assert.equal((await fetch(position, options('PUT', { memberId: 2, serviceType: 'ORDINARY' }))).status, 409);
+    const response = await fetch(position, options('PUT', { memberId: 2, serviceType: 'EXTRAORDINARY' }));
+    assert.equal(response.status, 200);
+    const { item } = await response.json();
+    assert.equal((await fetch(url + '/assignments/' + item.id + '/type', options('PATCH', { serviceType: 'ORDINARY' }))).status, 409);
+    assert.equal(db.prepare('SELECT service_type FROM assignments WHERE id=?').get(item.id).service_type, 'EXTRAORDINARY');
+  } finally {
+    db.prepare("UPDATE members SET operational_status='ACTIVE' WHERE id=2").run();
+  }
+});
 beforeEach(() => {
   db.exec("DELETE FROM assignments; DELETE FROM audit_logs; DELETE FROM schedule_pdf_column_releases; UPDATE service_slots SET current_capacity=2,status='OPEN',homologated_at=NULL; UPDATE competencies SET status='OPEN';");
   db.prepare('UPDATE competencies SET generated_at=?').run(stamp);

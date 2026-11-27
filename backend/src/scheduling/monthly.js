@@ -56,11 +56,15 @@ export function generateOrdinaryAssignments({ competencyId, userId = null, reaso
   if (!competency) throw new Error('Mês não encontrado para gerar a escala ordinária.');
   const targetStart = dayjs(`${competency.year}-${String(competency.month).padStart(2, '0')}-01`);
   const targetEnd = targetStart.endOf('month');
-  const legacyAnchors = db.prepare(`SELECT member_id,position_number,anchor_date AS last_service_date
-    FROM ordinary_rotations WHERE active=1 AND anchor_date<?
-    ORDER BY position_number,anchor_date,member_id`).all(targetStart.format('YYYY-MM-DD'));
-  const wingAnchors = wingAnchorsForMonth(competency);
-  const managedIds = new Set(wingAnchors.map((anchor) => anchor.member_id));
+  const start = targetStart.format('YYYY-MM-DD');
+  const usingWings = Boolean(cycleRuleForMonth(start));
+  const legacyAnchors = db.prepare(`SELECT r.member_id,r.position_number,r.anchor_date AS last_service_date
+    FROM ordinary_rotations r JOIN members m ON m.id=r.member_id WHERE r.active=1 AND r.anchor_date<?
+      AND (?=0 OR m.unit_type<>'CICC')
+    ORDER BY r.position_number,r.anchor_date,r.member_id`).all(start, Number(usingWings));
+  const memberships = membershipsForMonth(competency);
+  const wingAnchors = wingAnchorsForMonth(competency, memberships);
+  const managedIds = new Set(memberships.map((row) => row.member_id));
   const anchors = [...legacyAnchors.filter((anchor) => !managedIds.has(anchor.member_id)), ...wingAnchors]
     .filter((anchor) => !memberIds || memberIds.includes(anchor.member_id));
   const slots = db.prepare(`SELECT id,service_date,period,starts_at,ends_at,current_capacity,status,homologated_at

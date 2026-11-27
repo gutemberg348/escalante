@@ -180,7 +180,7 @@ export function undoLastWhatsAppCommand({ groupJid, actorMemberId, panelAdminist
           if (restored?.status !== 'CONFIRMED') continue;
           const member = db.prepare('SELECT * FROM members WHERE id=?').get(restored.member_id);
           if (!member?.active || member.authorization_status !== 'AUTHORIZED'
-            || !['ACTIVE', ...(restored.service_type === 'EXTRAORDINARY' ? ['VACATION'] : [])].includes(member.operational_status)) conflict();
+            || !['ACTIVE', ...(restored.service_type === 'EXTRAORDINARY' ? ['VACATION', 'LEAVE'] : [])].includes(member.operational_status)) conflict();
           if (restored.service_type === 'EXTRAORDINARY' && !member.hour_limit_exempt) {
             const month = db.prepare('SELECT c.* FROM competencies c JOIN service_slots s ON s.competency_id=c.id WHERE s.id=?').get(restored.service_slot_id);
             const hours = db.prepare(`SELECT COUNT(*)*12 hours FROM assignments a JOIN service_slots s ON s.id=a.service_slot_id

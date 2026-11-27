@@ -329,6 +329,31 @@ const migrations = [
       );
       CREATE INDEX IF NOT EXISTS idx_whatsapp_command_changes ON whatsapp_command_changes(command_id,id);`);
     }
+  },
+  {
+    version: '020_optional_wing_membership',
+    apply() {
+      // A dated pair of NULLs records a withdrawal without losing earlier months or moves.
+      db.exec(`CREATE TABLE wing_memberships_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, member_id INTEGER NOT NULL REFERENCES members(id),
+        wing_id INTEGER REFERENCES wings(id), position_number INTEGER CHECK(position_number IN (1,2)),
+        effective_month TEXT NOT NULL, updated_by INTEGER REFERENCES users(id), updated_at TEXT NOT NULL,
+        CHECK ((wing_id IS NULL) = (position_number IS NULL)), UNIQUE(member_id,effective_month)
+      );
+      INSERT INTO wing_memberships_new SELECT id,member_id,wing_id,position_number,effective_month,updated_by,updated_at FROM wing_memberships;
+      DROP TABLE wing_memberships;
+      ALTER TABLE wing_memberships_new RENAME TO wing_memberships;
+      CREATE INDEX idx_wing_membership_month ON wing_memberships(effective_month,member_id);
+      CREATE TABLE wing_month_overrides_new (
+        competency_id INTEGER NOT NULL REFERENCES competencies(id), member_id INTEGER NOT NULL REFERENCES members(id),
+        wing_id INTEGER REFERENCES wings(id), position_number INTEGER CHECK(position_number IN (1,2)),
+        from_date TEXT NOT NULL, updated_by INTEGER REFERENCES users(id), updated_at TEXT NOT NULL,
+        CHECK ((wing_id IS NULL) = (position_number IS NULL)), PRIMARY KEY(competency_id,member_id,from_date)
+      );
+      INSERT INTO wing_month_overrides_new SELECT competency_id,member_id,wing_id,position_number,from_date,updated_by,updated_at FROM wing_month_overrides;
+      DROP TABLE wing_month_overrides;
+      ALTER TABLE wing_month_overrides_new RENAME TO wing_month_overrides;`);
+    }
   }
 ];
 

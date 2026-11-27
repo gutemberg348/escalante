@@ -122,6 +122,39 @@ test('import saves the roster without changing the existing scale or extras', as
 const editedRoster = () => [memberEntry(1, 2), memberEntry(2, 1), ...[3, 4, 5].map((member) => memberEntry(member, member))];
 const savedAssignments = () => db.prepare('SELECT * FROM assignments ORDER BY id').all();
 
+test('a CICC withdrawal has a start date, preserves extras and overrides the old ordinary rotation', async () => {
+  await importRoster();
+  db.prepare("INSERT INTO ordinary_rotations (member_id,position_number,anchor_date,active,created_at,updated_at) VALUES (?,1,'2031-06-26',1,?,?)").run(1, stamp, stamp);
+  const extra = assignment(1, '2031-07-14', 'NOTURNO', 'EXTRAORDINARY', 2).lastInsertRowid;
+  const before = savedAssignments();
+  const withdrawal = { memberId: 1, wingId: null, positionNumber: null };
+  const move = { competencyId: competency.id, scope: 'NEXT_MONTH', entries: [withdrawal] };
+  assert.equal((await request('/move', move)).status, 200);
+  assert.deepEqual(savedAssignments(), before);
+  const august = ensureCompetencySchedule('2031-08-01').competency;
+  generateOrdinaryAssignments({ competencyId: august.id });
+  assert.deepEqual(memberDates(1, august.id), []);
+  assert.ok(memberDates(2, august.id).length);
+  const roster = (await request('/?competency_id=' + competency.id, null, 'GET')).data;
+  assert.ok(roster.memberships.some(row => row.member_id === 1));
+  assert.ok(!roster.nextMemberships.some(row => row.member_id === 1));
+  assert.equal((await request('/move', { ...move, scope: 'THIS_MONTH', fromDate: '2031-07-10' })).status, 200);
+  regenerateOrdinaryAssignments({ competencyId: competency.id });
+  assert.deepEqual(memberDates(1), ['2031-07-01', '2031-07-06']);
+  assert.deepEqual(db.prepare('SELECT * FROM assignments WHERE id=?').get(extra), before.find(row => row.id === extra));
+  assert.equal((await request('/move', { ...move, entries: [memberEntry(1, 1)] })).status, 200);
+  regenerateOrdinaryAssignments({ competencyId: august.id });
+  assert.ok(memberDates(1, august.id).length);
+});
+
+test('an unassigned CICC member with only a legacy rotation stays out after wings are configured', async () => {
+  await importRoster();
+  db.prepare("INSERT INTO ordinary_rotations (member_id,position_number,anchor_date,active,created_at,updated_at) VALUES (6,2,'2031-06-26',1,?,?)").run(stamp, stamp);
+  const august = ensureCompetencySchedule('2031-08-01').competency;
+  generateOrdinaryAssignments({ competencyId: august.id });
+  assert.deepEqual(memberDates(6, august.id), []);
+});
+
 function rosterWithOldPositionConflict() {
   // One member is inferred from the published scale, the other from an old
   // rotation. The operator fixes the latter to position 2 in the preview.
@@ -159,6 +192,21 @@ test('a real duplicate position in the submitted preview remains blocked', async
   assert.equal(result.status, 409);
   assert.deepEqual(savedAssignments(), before);
   assert.equal(db.prepare('SELECT COUNT(*) total FROM wing_memberships').get().total, 0);
+});
+
+test('optional wing migration retains dated memberships, overrides and published assignments', async () => {
+  await importRoster();
+  assert.equal((await request('/move', { competencyId: competency.id, scope: 'THIS_MONTH', fromDate: '2031-07-10', entries: [memberEntry(1, 1, 2)] })).status, 200);
+  const snapshot = () => ({
+    permanent: db.prepare('SELECT * FROM wing_memberships ORDER BY id').all(),
+    temporary: db.prepare('SELECT * FROM wing_month_overrides ORDER BY competency_id,member_id,from_date').all(),
+    assignments: savedAssignments()
+  });
+  const before = snapshot();
+  db.prepare("DELETE FROM schema_migrations WHERE version='020_optional_wing_membership'").run();
+  assert.equal(runMigrations(), 1);
+  assert.deepEqual(snapshot(), before);
+  assert.deepEqual(db.pragma('foreign_key_check'), []);
 });
 
 test('a later current-month move does not revalidate untouched historical conflicts', async () => {

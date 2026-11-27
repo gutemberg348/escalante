@@ -9,7 +9,10 @@ import { fiveWings, monthStart, wingDays, wingAnchorsForMonth, cycleRuleForMonth
 const router = Router();
 const id = z.coerce.number().int().positive();
 const mode = z.literal('CONTINUOUS').default('CONTINUOUS');
-const entry = z.object({ memberId: id, wingId: id, positionNumber: z.number().int().min(1).max(2) });
+const entry = z.union([
+  z.object({ memberId: id, wingId: id, positionNumber: z.number().int().min(1).max(2) }),
+  z.object({ memberId: id, wingId: z.null(), positionNumber: z.null() })
+]);
 const fail = (message, status = 400, details = {}) => { throw Object.assign(new Error(message), { status, details }); };
 const competencyFor = (value) => {
   const competency = db.prepare('SELECT * FROM competencies WHERE id=? AND generated_at IS NOT NULL').get(id.parse(value));
@@ -33,7 +36,7 @@ function validateEntries(entries) {
   for (const item of entries) {
     if (ids.has(item.memberId)) fail('Um militar só pode ter uma ala por alteração.');
     ids.add(item.memberId);
-    if (!wingIds.has(item.wingId)) fail('Escolha uma das cinco alas.');
+    if (item.wingId !== null && !wingIds.has(item.wingId)) fail('Escolha uma das cinco alas ou Sem ala.');
     if (!db.prepare('SELECT id FROM members WHERE id=?').get(item.memberId)) fail('Militar não encontrado.', 404);
   }
 }
@@ -83,7 +86,8 @@ router.get('/', handle((req, res) => {
   const future = nextMonth(competency);
   res.json({ competency, configured: Boolean(db.prepare('SELECT 1 FROM wing_cycle_rules LIMIT 1').get()), rule,
     wings: fiveWings().map((wing) => ({ ...wing, dates: wingDays(competency, wing.number, rule) })),
-    memberships: membershipsForMonth(competency), nextMemberships: membershipsForMonth(future),
+    memberships: membershipsForMonth(competency).filter(row => row.wing_id !== null),
+    nextMemberships: membershipsForMonth(future).filter(row => row.wing_id !== null),
     nextMonth: { ...future, startsAt: monthStart(future), rule: cycleRuleForMonth(monthStart(future)) },
     members: db.prepare(`SELECT id,rank,operational_name,active,operational_status,authorization_status,ordinary_eligible
       FROM members ORDER BY COALESCE(seniority_position,99999),rank,operational_name`).all()

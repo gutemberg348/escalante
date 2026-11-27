@@ -78,7 +78,7 @@ router.get('/', (req, res, next) => {
     const wingNames = new Map(fiveWings().map((wing) => [wing.id, wing.name]));
     res.json({ items: items.map((item) => {
       const membership = memberships.get(item.id);
-      return membership ? { ...item, wing_name: wingNames.get(membership.wing_id) } : item;
+      return membership ? { ...item, wing_name: wingNames.get(membership.wing_id) ?? null } : item;
     }) });
   } catch (error) { next(error); }
 });

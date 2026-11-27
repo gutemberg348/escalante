@@ -63,6 +63,8 @@ O painel, a consulta de confirmados e os próximos PDFs usam a mesma anotação;
 
 Na página **Efetivo**, a coluna **Ala** tem um seletor com as alas 1 a 5, semelhante ao de Situação. Escolher uma ala abre uma confirmação, sem salvar imediatamente. A janela permite conferir a posição, trocar com outro militar e programar a mudança a partir do próximo mês. Também há a opção de aplicá-la às datas restantes da escala selecionada. Nesse caso, a mudança atual e a futura são salvas juntas; se houver conflito, nenhuma delas será salva. A tabela indica a mudança programada abaixo do seletor.
 
+Escolha **Sem ala** para retirar um militar, inclusive do CICC. O aviso de confirmação indica que ele ficará fora da geração de ordinários no período escolhido. O militar autorizado pode continuar marcando extras, inclusive de férias ou licença.
+
 Antes da primeira mudança individual, faça o cadastro inicial em **Alas → Cadastrar militares nas alas**. Somente administradores e responsáveis pela escala podem alterar alas.
 
 Clique em **Trocar / remanejar** ou use a tabela **Efetivo e mudanças programadas**.

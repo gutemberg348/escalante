@@ -20,28 +20,30 @@ export function wingDays(competency, number, rule = cycleRuleForMonth(monthStart
 
 export function membershipsForMonth(competency) {
   const start = monthStart(competency);
-  const rows = db.prepare(`SELECT r.*,w.code FROM wing_memberships r JOIN wings w ON w.id=r.wing_id
+  const rows = db.prepare(`SELECT r.*,w.code FROM wing_memberships r LEFT JOIN wings w ON w.id=r.wing_id
     WHERE r.effective_month<=? AND NOT EXISTS (SELECT 1 FROM wing_memberships newer
       WHERE newer.member_id=r.member_id AND newer.effective_month<=? AND newer.effective_month>r.effective_month)`)
     .all(start, start);
   const result = new Map(rows.map((row) => [row.member_id, { ...row, temporary: false }]));
-  for (const row of db.prepare(`SELECT o.*,w.code FROM wing_month_overrides o JOIN wings w ON w.id=o.wing_id
+  for (const row of db.prepare(`SELECT o.*,w.code FROM wing_month_overrides o LEFT JOIN wings w ON w.id=o.wing_id
       WHERE o.competency_id=? ORDER BY o.from_date`).all(competency.id)) result.set(row.member_id, { ...row, temporary: true, baseline: result.get(row.member_id) });
   return [...result.values()];
 }
 
-export function wingAnchorsForMonth(competency) {
+export function wingAnchorsForMonth(competency, memberships = membershipsForMonth(competency)) {
   const rule = cycleRuleForMonth(monthStart(competency));
   if (!rule) return [];
   const toAnchors = (row, untilDate = null) => {
+    const previous = row.temporary && row.baseline && row.from_date > monthStart(competency)
+      ? toAnchors(row.baseline, dayjs(row.from_date).subtract(1, 'day').format('YYYY-MM-DD')) : [];
+    if (row.wing_id === null) return previous;
     const days = wingDays(competency, Number(row.code.slice(-1)), rule);
     const anchor = { member_id: row.member_id, position_number: row.position_number,
       last_service_date: dayjs(days[0]).subtract(5, 'day').format('YYYY-MM-DD'), wing_id: row.wing_id,
       from_date: row.temporary ? row.from_date : null, until_date: untilDate };
-    if (!row.temporary || !row.baseline || row.from_date <= monthStart(competency)) return [anchor];
-    return [...toAnchors(row.baseline, dayjs(row.from_date).subtract(1, 'day').format('YYYY-MM-DD')), anchor];
+    return [...previous, anchor];
   };
-  return membershipsForMonth(competency).flatMap((row) => toAnchors(row));
+  return memberships.flatMap((row) => toAnchors(row));
 }
 
 export function previewWingImport(competency) {
